@@ -19,7 +19,7 @@ class Configuration(ConfigurationConnecteur):
         return params
 
 
-def parse_args() -> Configuration:
+def parse_args() -> (Configuration, argparse.Namespace):
     parser = argparse.ArgumentParser(description="Relay between the MilleGrilles MQ bus and Ollama instances")
 
     parser.add_argument(
@@ -27,12 +27,10 @@ def parse_args() -> Configuration:
         help="Activates verbose logging"
     )
 
-    # Extract parameters to a dict
-    parser.parse_args()
-    arg_params = dict()
+    args = parser.parse_args()
 
     # Prepare the configuration instance
     config = Configuration()
-    config.parse_config(arg_params)
+    config.parse_config(args.__dict__)
 
-    return config
+    return config, args
