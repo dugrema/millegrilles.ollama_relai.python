@@ -7,6 +7,7 @@ from typing import Optional
 from millegrilles_messages.MilleGrillesConnecteur import MilleGrillesConnecteur
 from millegrilles_ollama_relai.Context import OllamaRelaiContext
 from millegrilles_ollama_relai.CommandHandler import CommandHandler
+from millegrilles_ollama_relai.QueryHandler import QueryHandler
 
 
 class OllamaRelai:
@@ -19,6 +20,7 @@ class OllamaRelai:
         self.__stop_event: Optional[asyncio.Event] = None
         self.__rabbitmq_dao: Optional[MilleGrillesConnecteur] = None
         self.__command_handler: Optional[CommandHandler] = None
+        self.__query_handler: Optional[QueryHandler] = None
         self.__loop = None
 
     @property
@@ -29,7 +31,8 @@ class OllamaRelai:
         self.__loop = asyncio.get_event_loop()
         self.__stop_event = asyncio.Event()
         await self.__context.reload_configuration()
-        self.__command_handler = CommandHandler(self)
+        self.__query_handler = QueryHandler(self.__context)
+        self.__command_handler = CommandHandler(self, self.__query_handler)
         self.__rabbitmq_dao = MilleGrillesConnecteur(self.__stop_event, self.__context, self.__command_handler)
 
     async def run(self):
