@@ -43,6 +43,7 @@ class OllamaRelai:
         tasks = [
             asyncio.create_task(self.__context.run(self.__stop_event, self.__rabbitmq_dao), name='context'),
             asyncio.create_task(self.__rabbitmq_dao.run(), name="mq"),
+            asyncio.create_task(self.__query_handler.run(self.__stop_event), name="query_handler"),
         ]
 
         await asyncio.gather(*tasks)

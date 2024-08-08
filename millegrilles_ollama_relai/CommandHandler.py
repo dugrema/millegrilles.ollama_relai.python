@@ -30,7 +30,7 @@ class CommandHandler(CommandesAbstract):
         # Ecouter les evenements sur les commandes. Permet a plusieurs relais de coordonner les executions.
         return [
             RoutingKey('evenement.ollama_relai.*.debutTraitement', ConstantesMilleGrilles.SECURITE_PRIVE),
-            RoutingKey('evenement.ollama_relai.*.miseajour', ConstantesMilleGrilles.SECURITE_PRIVE),
+            RoutingKey('evenement.ollama_relai.*.encours', ConstantesMilleGrilles.SECURITE_PRIVE),
             RoutingKey('evenement.ollama_relai.*.resultat', ConstantesMilleGrilles.SECURITE_PRIVE),
             RoutingKey('evenement.ollama_relai.*.annule', ConstantesMilleGrilles.SECURITE_PRIVE),
         ]
@@ -108,4 +108,7 @@ class CommandHandler(CommandesAbstract):
             return await self.__query_handler.process_query(message)
 
         if domaine == 'ollama_relai':
-            return await self.__query_handler.handle_query(message)
+            if type_message == 'evenement':
+                return False  # TODO Traiter evenements
+            elif type_message == 'commande':
+                return await self.__query_handler.handle_query(message)
