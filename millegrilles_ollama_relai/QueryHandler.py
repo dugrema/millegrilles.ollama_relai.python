@@ -1,13 +1,15 @@
 import asyncio
 import logging
-
+import json
 import requests
+import multibase
 
 from typing import Optional
 
 from millegrilles_messages.messages import Constantes as ConstantesMilleGrilles
 from millegrilles_messages.messages.MessagesModule import MessageWrapper
 from millegrilles_ollama_relai.Context import OllamaRelaiContext
+from millegrilles_messages.chiffrage.DechiffrageUtils import dechiffrer_reponse
 
 
 class QueryHandler:
@@ -59,7 +61,6 @@ class QueryHandler:
         type_message = rk_split[0]
         domaine = rk_split[1]
         action = rk_split.pop()
-        enveloppe = message.certificat
 
         if type_message != 'commande':
             raise Exception('Wrong message kind, must be command')
@@ -71,26 +72,17 @@ class QueryHandler:
             raise Exception('Actions can only be one of: chat, generate')
 
         # Start emitting "waiting" events to tell the client it is still queued-up
-        try:
-            chat_id = message.parsed['chat_id']
-        except KeyError:
-            chat_id = message.id
+        chat_id = message.id
         self.__waiting_ids.add(chat_id)
 
         # Re-emit the message on the traitement Q
         await producer.executer_commande(message.original, domaine='ollama_relai', action='traitement',
                                          exchange=ConstantesMilleGrilles.SECURITE_PROTEGE, noformat=True, nowait=True)
 
-        return {'ok': True}
+        return {'ok': True, 'partition': chat_id}
 
     async def process_query(self, message: MessageWrapper):
-        content = message.parsed.copy()
-        del content['__original']
-        try:
-            chat_id = content['chat_id']
-            del content['chat_id']
-        except KeyError:
-            chat_id = message.id
+        chat_id = message.id
 
         try:
             self.__waiting_ids.remove(chat_id)
@@ -101,16 +93,32 @@ class QueryHandler:
         await producer.producer_pret().wait()
 
         try:
+            self.__processing_ids.add(chat_id)
+
+            await producer.emettre_evenement(dict(), domaine='ollama_relai', action='debutTraitement',
+                                             partition=chat_id, exchanges=ConstantesMilleGrilles.SECURITE_PRIVE)
+
+            try:
+                content = message.parsed.copy()
+                del content['__original']
+            except AttributeError:
+                # Recover the keys, send to MaitreDesCles to get the decrypted value
+                encrypted_message = json.loads(message.contenu)
+                dechiffrage = encrypted_message['dechiffrage']
+
+                decryption_key_response = await producer.executer_requete(dechiffrage, 'MaitreDesCles', 'dechiffrageMessage',
+                                                                          exchange=ConstantesMilleGrilles.SECURITE_PROTEGE)
+
+                decryption_key = decryption_key_response.parsed['cle_secrete_base64']
+                decryption_key = multibase.decode('m' + decryption_key)
+
+                content = await asyncio.to_thread(dechiffrer_reponse, decryption_key, encrypted_message)
+
             action = message.routage['action']
 
             if action not in ['chat', 'generate']:
                 # Raising an exception sends the cancel event to the client
                 raise Exception('Unsupported action: %s' % action)
-
-            self.__processing_ids.add(chat_id)
-
-            await producer.emettre_evenement(dict(), domaine='ollama_relai', action='debutTraitement',
-                                             partition=chat_id, exchanges=ConstantesMilleGrilles.SECURITE_PRIVE)
 
             # Run the query. Emit
             done_event = asyncio.Event()

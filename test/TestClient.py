@@ -2,6 +2,7 @@ import asyncio
 import binascii
 import logging
 import json
+import requests
 
 from typing import Optional
 
@@ -10,6 +11,7 @@ from pypdf import PdfReader
 from millegrilles_messages.messages import Constantes
 from millegrilles_messages.messages.MessagesThread import MessagesThread
 from millegrilles_messages.messages.MessagesModule import RessourcesConsommation, MessageWrapper
+from millegrilles_messages.messages.EnveloppeCertificat import EnveloppeCertificat
 
 logger = logging.getLogger(__name__)
 
@@ -19,11 +21,14 @@ RELAI_DOMAINE = 'ollama_relai'
 
 # Global
 CHAT_INSTANCE = None
+EVENT_WAIT: Optional[asyncio.Event] = None
 
 
 async def main():
+    global EVENT_WAIT
     logger.info("Debut main()")
     stop_event = asyncio.Event()
+    EVENT_WAIT = asyncio.Event()
 
     # Preparer resources consumer
     reply_res = RessourcesConsommation(callback_reply_q)
@@ -66,18 +71,30 @@ async def run_tests(messages_thread, stop_event):
 
 
 async def run_generate(messages_thread):
+    global EVENT_WAIT
+    enveloppes = await asyncio.to_thread(get_maitredescles_certificates)
+
     commande = {
         'model': 'llama3.1',
         'prompt': 'Why is the sky blue?',
         'stream': False,
     }
     producer = messages_thread.get_producer()
-    reponse = await producer.executer_commande(commande, RELAI_DOMAINE, action='generate', exchange=Constantes.SECURITE_PRIVE)
+
+    commande, correlation_id = await producer.chiffrer(
+        enveloppes, Constantes.KIND_COMMANDE_INTER_MILLEGRILLE, commande, domaine=RELAI_DOMAINE, action='generate')
+    reponse = await producer.executer_commande(commande, RELAI_DOMAINE, action='generate',
+                                               exchange=Constantes.SECURITE_PRIVE, noformat=True)
+
     contenu = json.dumps(reponse.parsed, indent=2)
-    logger.info("Reponse recue : %s", contenu)
+    logger.info("Confirmation recue : %s", contenu)
+
+    EVENT_WAIT.clear()
+    await EVENT_WAIT.wait()
 
 
 async def run_image(messages_thread):
+    enveloppes = await asyncio.to_thread(get_maitredescles_certificates)
 
     with open('/home/mathieu/tas/work/001.JPG', 'rb') as fichier:
         image = binascii.b2a_base64(fichier.read()).decode('utf-8')
@@ -90,12 +107,19 @@ async def run_image(messages_thread):
     }
 
     producer = messages_thread.get_producer()
-    reponse = await producer.executer_commande(commande, RELAI_DOMAINE, action='generate', exchange=Constantes.SECURITE_PRIVE)
+    commande, correlation_id = await producer.chiffrer(
+        enveloppes, Constantes.KIND_COMMANDE_INTER_MILLEGRILLE, commande, domaine=RELAI_DOMAINE, action='generate')
+    reponse = await producer.executer_commande(commande, RELAI_DOMAINE, action='generate',
+                                               exchange=Constantes.SECURITE_PRIVE, noformat=True)
     contenu = json.dumps(reponse.parsed, indent=2)
-    logger.info("Reponse recue : %s", contenu)
+    logger.info("Confirmation recue : %s", contenu)
+
+    EVENT_WAIT.clear()
+    await EVENT_WAIT.wait()
 
 
 async def run_pdf(messages_thread):
+    enveloppes = await asyncio.to_thread(get_maitredescles_certificates)
 
     pdf_file = PdfReader('/home/mathieu/tas/work/WorldMarkets.pdf')
 
@@ -112,9 +136,15 @@ async def run_pdf(messages_thread):
     }
 
     producer = messages_thread.get_producer()
-    reponse = await producer.executer_commande(commande, RELAI_DOMAINE, action='generate', exchange=Constantes.SECURITE_PRIVE)
+    commande, correlation_id = await producer.chiffrer(
+        enveloppes, Constantes.KIND_COMMANDE_INTER_MILLEGRILLE, commande, domaine=RELAI_DOMAINE, action='generate')
+    reponse = await producer.executer_commande(commande, RELAI_DOMAINE, action='generate',
+                                               exchange=Constantes.SECURITE_PRIVE, noformat=True)
     contenu = json.dumps(reponse.parsed, indent=2)
-    logger.info("Reponse recue : %s", contenu)
+    logger.info("Confirmation recue : %s", contenu)
+
+    EVENT_WAIT.clear()
+    await EVENT_WAIT.wait()
 
 
 async def run_chat(messages_thread):
@@ -130,6 +160,7 @@ class Chat:
         self.response_q: asyncio.Queue[MessageWrapper] = asyncio.Queue(maxsize=1)
 
     async def run_chat(self, messages_thread):
+        enveloppes = await asyncio.to_thread(get_maitredescles_certificates)
 
         source_messages = [
             {'role': 'user', 'content': 'Why is the sky blue?'},
@@ -144,8 +175,10 @@ class Chat:
             producer = messages_thread.get_producer()
 
             # Recuperer le message_id pour faire la correlation
-            commande, self.correlation_id = await producer.signer(commande, Constantes.KIND_COMMANDE,
-                                                                  RELAI_DOMAINE, action='chat')
+            # commande, self.correlation_id = await producer.signer(commande, Constantes.KIND_COMMANDE,
+            #                                                       RELAI_DOMAINE, action='chat')
+            commande, self.correlation_id = await producer.chiffrer(
+                enveloppes, Constantes.KIND_COMMANDE_INTER_MILLEGRILLE, commande, domaine=RELAI_DOMAINE, action='chat')
             reponse = await producer.executer_commande(commande, RELAI_DOMAINE, action='chat',
                                                        exchange=Constantes.SECURITE_PRIVE, noformat=True)
 
@@ -160,6 +193,8 @@ class Chat:
 
 async def callback_reply_q(message: MessageWrapper, messages_module):
     global CHAT_INSTANCE
+    global EVENT_WAIT
+
     logger.info("Message recu : %s" % message)
 
     if message.kind == Constantes.KIND_REPONSE_CHIFFREE:
@@ -171,9 +206,31 @@ async def callback_reply_q(message: MessageWrapper, messages_module):
         partition = message.routage['partition']
         action = message.routage['action']
 
-    if CHAT_INSTANCE:
-        if action == 'resultat' and partition == CHAT_INSTANCE.correlation_id:
+    if action == 'resultat':
+        if CHAT_INSTANCE and partition == CHAT_INSTANCE.correlation_id:
             await CHAT_INSTANCE.response_q.put(message)
+        else:
+            content = message.parsed
+            del content['__original']
+            print("Response\n%s" % json.dumps(content, indent=2))
+            EVENT_WAIT.set()
+
+
+def get_maitredescles_certificates() -> list[EnveloppeCertificat]:
+    fiche_response = requests.get('http://localhost/fiche.json')
+    fiche = fiche_response.json()
+
+    contenu_fiche = json.loads(fiche['contenu'])
+
+    enveloppes = list()
+    for cert_chiffrage in contenu_fiche['chiffrage']:
+        enveloppe = EnveloppeCertificat.from_pem('\n'.join(cert_chiffrage))
+        enveloppes.append(enveloppe)
+
+    if len(enveloppes) == 0:
+        raise Exception('Maitre des cles certificate is not available')
+
+    return enveloppes
 
 
 if __name__ == '__main__':
