@@ -125,7 +125,7 @@ class QueryHandler:
             # Run the query. Emit
             done_event = asyncio.Event()
             response_content = await self.query_ollama(action, content, done_event)
-            # response_content = {'role': 'dummy', 'message': 'NANANA2'}
+            # response_content = {'message': {'role': 'dummy', 'content': 'NANANA2'}}
 
             response_content['evenement'] = 'resultat'
 
