@@ -44,7 +44,8 @@ class QueryHandler:
             await producer.producer_pret().wait()
 
             for partition_id in partition_ids:
-                await producer.emettre_evenement({}, domaine='ollama_relai', action=event_name, partition=partition_id,
+                await producer.emettre_evenement({'evenement': event_name},
+                                                 domaine='ollama_relai', action='evenement', partition=partition_id,
                                                  exchanges=ConstantesMilleGrilles.SECURITE_PRIVE)
 
             try:
@@ -95,8 +96,9 @@ class QueryHandler:
         try:
             self.__processing_ids.add(chat_id)
 
-            await producer.emettre_evenement(dict(), domaine='ollama_relai', action='debutTraitement',
-                                             partition=chat_id, exchanges=ConstantesMilleGrilles.SECURITE_PRIVE)
+            await producer.emettre_evenement({'evenement': 'debutTraitement'},
+                                             domaine='ollama_relai', action='evenement', partition=chat_id,
+                                             exchanges=ConstantesMilleGrilles.SECURITE_PRIVE)
 
             try:
                 content = message.parsed.copy()
@@ -123,7 +125,9 @@ class QueryHandler:
             # Run the query. Emit
             done_event = asyncio.Event()
             response_content = await self.query_ollama(action, content, done_event)
-            # response_content = {'role': 'dummy', 'message': 'NANANA'}
+            # response_content = {'role': 'dummy', 'message': 'NANANA2'}
+
+            response_content['evenement'] = 'resultat'
 
             # if action == 'generate':
             #     print("Response: %s" % response_content['response'])
@@ -133,19 +137,21 @@ class QueryHandler:
             # Send the encrypted response as result event to client
             enveloppe = message.certificat
             reponse_tuple = await producer.chiffrer([enveloppe], ConstantesMilleGrilles.KIND_REPONSE_CHIFFREE,
-                                                    response_content, domaine='ollama_relai', action='resultat',
-                                                    partition=chat_id)
+                                                    response_content, partition=chat_id)
             encrypted_response = reponse_tuple[0]
-            await producer.emettre_evenement(encrypted_response, domaine='ollama_relai', action='resultat',
-                                             partition=chat_id, exchanges=ConstantesMilleGrilles.SECURITE_PRIVE, noformat=True)
+            await producer.emettre_evenement(encrypted_response, domaine='ollama_relai', action='evenement',
+                                             partition=chat_id, exchanges=ConstantesMilleGrilles.SECURITE_PRIVE,
+                                             noformat=True)
 
             # Ensure all instances of relai stop issuing events for this chat_id
-            await producer.emettre_evenement({}, domaine='ollama_relai', action='termine', partition=chat_id,
+            await producer.emettre_evenement({'evenement': 'termine'},
+                                             domaine='ollama_relai', action='evenement', partition=chat_id,
                                              exchanges=ConstantesMilleGrilles.SECURITE_PRIVE)
 
             return None
         except Exception as e:
-            await producer.emettre_evenement({}, domaine='ollama_relai', action='annuler', partition=chat_id,
+            await producer.emettre_evenement({'evenement': 'annuler'},
+                                             domaine='ollama_relai', action='evenement', partition=chat_id,
                                              exchanges=ConstantesMilleGrilles.SECURITE_PRIVE)
             raise e
         finally:

@@ -32,11 +32,7 @@ async def main():
 
     # Preparer resources consumer
     reply_res = RessourcesConsommation(callback_reply_q)
-    reply_res.ajouter_rk(Constantes.SECURITE_PRIVE, "evenement.ollama_relai.*.attente")
-    reply_res.ajouter_rk(Constantes.SECURITE_PRIVE, "evenement.ollama_relai.*.debutTraitement")
-    reply_res.ajouter_rk(Constantes.SECURITE_PRIVE, "evenement.ollama_relai.*.encours")
-    reply_res.ajouter_rk(Constantes.SECURITE_PRIVE, "evenement.ollama_relai.*.resultat")
-    reply_res.ajouter_rk(Constantes.SECURITE_PRIVE, "evenement.ollama_relai.*.annule")
+    reply_res.ajouter_rk(Constantes.SECURITE_PRIVE, "evenement.ollama_relai.*.evenement")
 
     messages_thread = MessagesThread(stop_event)
     messages_thread.set_env_configuration(dict())
@@ -60,10 +56,10 @@ async def run_tests(messages_thread, stop_event):
 
     logger.info("emettre commandes")
 
-    # await run_generate(messages_thread)
+    await run_generate(messages_thread)
     # await run_image(messages_thread)
     # await run_pdf(messages_thread)
-    await run_chat(messages_thread)
+    # await run_chat(messages_thread)
 
     stop_event.set()
 
@@ -206,7 +202,7 @@ async def callback_reply_q(message: MessageWrapper, messages_module):
         partition = message.routage['partition']
         action = message.routage['action']
 
-    if action == 'resultat':
+    if message.kind == Constantes.KIND_REPONSE_CHIFFREE:
         if CHAT_INSTANCE and partition == CHAT_INSTANCE.correlation_id:
             await CHAT_INSTANCE.response_q.put(message)
         else:
