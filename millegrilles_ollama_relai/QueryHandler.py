@@ -183,7 +183,7 @@ class QueryHandler:
             return None
         except Exception as e:
             await producer.repondre({'ok': False, 'err': str(e)},
-                                    correlation_id=original_message.correlation_id, reply_to=original_message.reply_to)
+                                    correlation_id=correlation_id, reply_to=reply_to)
             raise e
         finally:
             try:
