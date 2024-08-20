@@ -79,14 +79,23 @@ async def run_generate(messages_thread):
 
     commande, correlation_id = await producer.chiffrer(
         enveloppes, Constantes.KIND_COMMANDE_INTER_MILLEGRILLE, commande, domaine=RELAI_DOMAINE, action='generate')
-    reponse = await producer.executer_commande(commande, RELAI_DOMAINE, action='generate',
-                                               exchange=Constantes.SECURITE_PRIVE, noformat=True)
+    # reponse = await producer.executer_commande(commande, RELAI_DOMAINE, action='generate',
+    #                                            exchange=Constantes.SECURITE_PRIVE, noformat=True)
+    async for reponse in producer.executer_commande_stream(commande, RELAI_DOMAINE, action='generate',
+                                                           exchange=Constantes.SECURITE_PRIVE, noformat=True):
+        parsed = reponse.parsed.copy()
+        del parsed['__original']
+        contenu = json.dumps(parsed, indent=2)
+        logger.info("Message stream recu : %s" % contenu)
+        try:
+            token = parsed['message']['content']
+            print(token, end='')
+        except:
+            print('Keep alive: %s' % contenu)
 
-    contenu = json.dumps(reponse.parsed, indent=2)
-    logger.info("Confirmation recue : %s", contenu)
-
-    EVENT_WAIT.clear()
-    await EVENT_WAIT.wait()
+    print("run_generate Done")
+    EVENT_WAIT.set()
+    # await EVENT_WAIT.wait()
 
 
 async def run_image(messages_thread):
@@ -175,16 +184,16 @@ class Chat:
             #                                                       RELAI_DOMAINE, action='chat')
             commande, self.correlation_id = await producer.chiffrer(
                 enveloppes, Constantes.KIND_COMMANDE_INTER_MILLEGRILLE, commande, domaine=RELAI_DOMAINE, action='chat')
-            reponse = await producer.executer_commande(commande, RELAI_DOMAINE, action='chat',
-                                                       exchange=Constantes.SECURITE_PRIVE, noformat=True)
 
-            contenu = json.dumps(reponse.parsed, indent=2)
-            logger.info("Reponse recue : %s", contenu)
+            async for reponse in producer.executer_commande_stream(commande, RELAI_DOMAINE, action='chat',
+                                                                   exchange=Constantes.SECURITE_PRIVE, noformat=True):
+                contenu = json.dumps(reponse.parsed, indent=2)
+                logger.info("Reponse recue : %s", contenu)
 
-            reponse = await asyncio.wait_for(self.response_q.get(), 600)
-            print("Reponse: %s" % reponse.parsed)
-            message_assistant = reponse.parsed['message']
-            messages.append(message_assistant)
+                reponse = await asyncio.wait_for(self.response_q.get(), 600)
+                print("Reponse: %s" % reponse.parsed)
+                message_assistant = reponse.parsed['message']
+                messages.append(message_assistant)
 
 
 async def callback_reply_q(message: MessageWrapper, messages_module):
@@ -198,11 +207,7 @@ async def callback_reply_q(message: MessageWrapper, messages_module):
         rk_split = message.routing_key.split('.')
         action = rk_split.pop()
         partition = rk_split.pop()
-    else:
-        partition = message.routage['partition']
-        action = message.routage['action']
 
-    if message.kind == Constantes.KIND_REPONSE_CHIFFREE:
         if CHAT_INSTANCE and partition == CHAT_INSTANCE.correlation_id:
             await CHAT_INSTANCE.response_q.put(message)
         else:
@@ -210,6 +215,11 @@ async def callback_reply_q(message: MessageWrapper, messages_module):
             del content['__original']
             print("Response\n%s" % json.dumps(content, indent=2))
             EVENT_WAIT.set()
+
+    else:
+        logger.info("Message recu : ", message.contenu)
+        # partition = message.routage['partition']
+        # action = message.routage['action']
 
 
 def get_maitredescles_certificates() -> list[EnveloppeCertificat]:
@@ -231,8 +241,9 @@ def get_maitredescles_certificates() -> list[EnveloppeCertificat]:
 
 if __name__ == '__main__':
     logging.basicConfig(format=LOGGING_FORMAT, level=logging.WARN)
-    logging.getLogger(__name__).setLevel(logging.DEBUG)
-    logging.getLogger('millegrilles_messages').setLevel(logging.DEBUG)
-    logging.getLogger('millegrilles_ollama_relai').setLevel(logging.DEBUG)
+    level = logging.ERROR
+    logging.getLogger(__name__).setLevel(level)
+    logging.getLogger('millegrilles_messages').setLevel(level)
+    logging.getLogger('millegrilles_ollama_relai').setLevel(level)
 
     asyncio.run(main())
