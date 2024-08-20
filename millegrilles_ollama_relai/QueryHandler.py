@@ -147,8 +147,6 @@ class QueryHandler:
                 raise Exception('action %s not supported' % action)
             # response_content = {'message': {'role': 'dummy', 'content': 'NANANA2'}}
 
-            await asyncio.sleep(60)  # Test
-
             emit_interval = datetime.timedelta(milliseconds=750)
             next_emit = datetime.datetime.now() + emit_interval
             buffer = ''

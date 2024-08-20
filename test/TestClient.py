@@ -56,10 +56,10 @@ async def run_tests(messages_thread, stop_event):
 
     logger.info("emettre commandes")
 
-    await run_generate(messages_thread)
+    # await run_generate(messages_thread)
     # await run_image(messages_thread)
     # await run_pdf(messages_thread)
-    # await run_chat(messages_thread)
+    await run_chat(messages_thread)
 
     stop_event.set()
 
@@ -79,8 +79,6 @@ async def run_generate(messages_thread):
 
     commande, correlation_id = await producer.chiffrer(
         enveloppes, Constantes.KIND_COMMANDE_INTER_MILLEGRILLE, commande, domaine=RELAI_DOMAINE, action='generate')
-    # reponse = await producer.executer_commande(commande, RELAI_DOMAINE, action='generate',
-    #                                            exchange=Constantes.SECURITE_PRIVE, noformat=True)
     async for reponse in producer.executer_commande_stream(commande, RELAI_DOMAINE, action='generate',
                                                            exchange=Constantes.SECURITE_PRIVE, noformat=True):
         parsed = reponse.parsed.copy()
@@ -170,30 +168,43 @@ class Chat:
         source_messages = [
             {'role': 'user', 'content': 'Why is the sky blue?'},
             {'role': 'user', 'content': 'Could you say more about Rayleigh scattering?'},
+            {'role': 'user', 'content': 'I\'d like to know more about related topics.'},
         ]
 
         messages = list()
         for i in range(0, len(source_messages)):
-            messages.append(source_messages[i])
-            commande = {'model': 'llama3.1', 'messages': messages, 'stream': False}
+
+            message_user_courant = source_messages[i]
+            print("User:\n%s\nReply:\n" % message_user_courant['content'])
+
+            messages.append(message_user_courant)
+            commande = {'model': 'llama3.1', 'messages': messages}
 
             producer = messages_thread.get_producer()
 
             # Recuperer le message_id pour faire la correlation
-            # commande, self.correlation_id = await producer.signer(commande, Constantes.KIND_COMMANDE,
-            #                                                       RELAI_DOMAINE, action='chat')
             commande, self.correlation_id = await producer.chiffrer(
                 enveloppes, Constantes.KIND_COMMANDE_INTER_MILLEGRILLE, commande, domaine=RELAI_DOMAINE, action='chat')
 
+            message_assistant = ''
+            reponse = None
             async for reponse in producer.executer_commande_stream(commande, RELAI_DOMAINE, action='chat',
                                                                    exchange=Constantes.SECURITE_PRIVE, noformat=True):
-                contenu = json.dumps(reponse.parsed, indent=2)
-                logger.info("Reponse recue : %s", contenu)
+                parsed = reponse.parsed.copy()
+                try:
+                    token = parsed['message']['content']
+                    message_assistant += token
+                    print(token, end='')
+                except:
+                    logger.debug('Keep alive')
 
-                reponse = await asyncio.wait_for(self.response_q.get(), 600)
-                print("Reponse: %s" % reponse.parsed)
-                message_assistant = reponse.parsed['message']
-                messages.append(message_assistant)
+            if reponse is not None:
+                message_response = reponse.parsed
+                del message_response['__original']
+                message_response['message']['content'] = message_assistant  # Concatenate entire response
+                messages.append({'role': message_response['message']['role'], 'content': message_response['message']['content']})
+
+            print('\n')  # End
 
 
 async def callback_reply_q(message: MessageWrapper, messages_module):
