@@ -59,6 +59,7 @@ class CommandHandler(CommandesAbstract):
         res_volatil.ajouter_rk(ConstantesMilleGrilles.SECURITE_PROTEGE, 'commande.ollama_relai.pull')
         res_volatil.ajouter_rk(ConstantesMilleGrilles.SECURITE_PRIVE, 'commande.ollama_relai.generate')
         res_volatil.ajouter_rk(ConstantesMilleGrilles.SECURITE_PRIVE, 'commande.ollama_relai.chat')
+        res_volatil.ajouter_rk(ConstantesMilleGrilles.SECURITE_PRIVE, 'requete.ollama_relai.ping')
 
         self.__messages_thread.ajouter_consumer(res_volatil)
 
@@ -112,3 +113,5 @@ class CommandHandler(CommandesAbstract):
                 return False  # TODO Traiter evenements
             elif type_message == 'commande':
                 return await self.__query_handler.handle_query(message)
+            elif type_message == 'requete':
+                return await self.__query_handler.handle_requests(message)

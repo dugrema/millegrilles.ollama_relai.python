@@ -2,6 +2,8 @@ import asyncio
 import datetime
 import logging
 import json
+
+import httpx
 # import requests
 import multibase
 from ollama import AsyncClient
@@ -55,6 +57,29 @@ class QueryHandler:
                 await asyncio.wait_for(self.__stop_event.wait(), 15)
             except asyncio.TimeoutError:
                 pass  # This is supposed to time out
+
+    async def handle_requests(self, message: MessageWrapper):
+        producer = self.__context.producer
+        await producer.producer_pret().wait()
+
+        # Confirm routing key
+        rk_split = message.routing_key.split('.')
+        type_message = rk_split[0]
+        domaine = rk_split[1]
+        action = rk_split.pop()
+
+        if type_message != 'requete':
+            raise Exception('Wrong message kind, must be command')
+
+        if domaine != 'ollama_relai':
+            raise Exception('Domaine must be ollama_relai')
+
+        if action == 'ping':
+            available, message = await self.ollama_ping()
+            return {'ok': available, 'err': message}
+
+        raise Exception('Unknown request: %s' % action)
+
 
     async def handle_query(self, message: MessageWrapper):
         producer = self.__context.producer
@@ -200,5 +225,16 @@ class QueryHandler:
         )
 
         async for part in stream:
-            print("Stream part %s" % part)
             yield part
+
+    async def ollama_ping(self) -> (bool, str):
+        client = AsyncClient(host=self.__context.configuration.ollama_url)
+        try:
+            # Test connection by getting currently loaded model information
+            await client.ps()
+            return True, ''
+        except httpx.ConnectError:
+            # Failed to connect
+            pass
+
+        return False, 'ollama connection error'
