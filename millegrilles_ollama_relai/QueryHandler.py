@@ -175,6 +175,7 @@ class QueryHandler:
             emit_interval = datetime.timedelta(milliseconds=750)
             next_emit = datetime.datetime.now() + emit_interval
             buffer = ''
+            complete_response = []
             async for chunk in chat_stream:
                 try:
                     # Stop emitting keep-alive messages
@@ -183,9 +184,11 @@ class QueryHandler:
                     pass  # Ok, already removed or on another instance
 
                 attachements = None
+                done = True
                 try:
                     if chunk['done'] is not True:
                         attachements = {'streaming': True}
+                        done = False
                 except KeyError:
                     pass
 
@@ -194,7 +197,18 @@ class QueryHandler:
                 now = datetime.datetime.now()
                 if attachements is None or now > next_emit:
                     chunk['message']['content'] = buffer
+                    complete_response.append(buffer)  # Keep for response transaction
                     buffer = ''
+
+                    if done:
+                        # Prepare a command to save the complete response, send id as part of last streaming message
+                        message_id = 'TATA'
+
+                        # TODO Reuse decryption key. The key will be used for all messages in this conversation
+                        encrypted_command, command_id = await producer.chiffrer(
+                            [enveloppe], ConstantesMilleGrilles.KIND_REPONSE_CHIFFREE, chunk, partition=chat_id)
+
+                        chunk['message_id'] = command_id
 
                     reponse_tuple = await producer.chiffrer([enveloppe], ConstantesMilleGrilles.KIND_REPONSE_CHIFFREE,
                                                             chunk, partition=chat_id)
