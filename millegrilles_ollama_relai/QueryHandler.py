@@ -1,10 +1,8 @@
 import asyncio
 import datetime
 import logging
-import json
 
 import httpx
-# import requests
 import multibase
 from ollama import AsyncClient
 
@@ -12,9 +10,8 @@ from typing import Optional
 
 from millegrilles_messages.messages import Constantes as ConstantesMilleGrilles
 from millegrilles_messages.messages.MessagesModule import MessageWrapper
-from millegrilles_messages.messages.EnveloppeCertificat import EnveloppeCertificat
 from millegrilles_ollama_relai.Context import OllamaRelaiContext
-from millegrilles_messages.chiffrage.DechiffrageUtils import dechiffrer_reponse
+from millegrilles_messages.chiffrage.DechiffrageUtils import dechiffrer_bytes_secrete, dechiffrer_document_secrete
 
 
 class QueryHandler:
@@ -105,9 +102,11 @@ class QueryHandler:
         self.__waiting_ids[chat_id] = {'reply_to': message.reply_to, 'correlation_id': message.correlation_id}
 
         # Re-emit the message on the traitement Q
+        attachements = {'correlation_id': message.correlation_id, 'reply_to': message.reply_to}
+        attachements.update(message.original['attachements'])
         await producer.executer_commande(message.original, domaine='ollama_relai', action='traitement',
                                          exchange=ConstantesMilleGrilles.SECURITE_PROTEGE, noformat=True, nowait=True,
-                                         attachements={'correlation_id': message.correlation_id, 'reply_to': message.reply_to})
+                                         attachements=attachements)
 
         await producer.repondre(
             {'ok': True, 'partition': chat_id, 'stream': True, 'reponse': 1},
@@ -125,8 +124,12 @@ class QueryHandler:
         original_message = message.original
         # enveloppe = EnveloppeCertificat.from_pem(original_message['certificat'])
         enveloppe = message.certificat
-        correlation_id = original_message['attachements']['correlation_id']
-        reply_to = original_message['attachements']['reply_to']
+        attachments: dict = original_message['attachements']
+        correlation_id = attachments['correlation_id']
+        reply_to = attachments['reply_to']
+        chat_history: Optional[dict] = attachments['history']
+        decryption_keys = attachments['keys']
+        domain_signature = attachments['signature']
 
         producer = self.__context.producer
         await producer.producer_pret().wait()
@@ -137,21 +140,30 @@ class QueryHandler:
                                              domaine='ollama_relai', action='evenement', partition=chat_id,
                                              exchanges=ConstantesMilleGrilles.SECURITE_PROTEGE)
 
-            try:
-                content = message.parsed.copy()
-                del content['__original']
-            except AttributeError:
-                # Recover the keys, send to MaitreDesCles to get the decrypted value
-                encrypted_message = json.loads(message.contenu)
-                dechiffrage = encrypted_message['dechiffrage']
+            # decryption_key: Optional[bytes] = None
+            # chiffrage: Optional[dict] = None
+            content = message.parsed.copy()
+            del content['__original']
 
-                decryption_key_response = await producer.executer_requete(dechiffrage, 'MaitreDesCles', 'dechiffrageMessage',
-                                                                          exchange=ConstantesMilleGrilles.SECURITE_PROTEGE)
+            chat_model = content['model']
+            chat_role = content['role']
 
-                decryption_key = decryption_key_response.parsed['cle_secrete_base64']
-                decryption_key: bytes = multibase.decode('m' + decryption_key)
+            # Recover the keys, send to MaitreDesCles to get the decrypted value
+            dechiffrage = {'signature': domain_signature, 'cles': decryption_keys}
+            decryption_key_response = await producer.executer_requete(dechiffrage, 'MaitreDesCles', 'dechiffrageMessage',
+                                                                      exchange=ConstantesMilleGrilles.SECURITE_PROTEGE)
 
-                content = await asyncio.to_thread(dechiffrer_reponse, decryption_key, encrypted_message)
+            decryption_key = decryption_key_response.parsed['cle_secrete_base64']
+            decryption_key: bytes = multibase.decode('m' + decryption_key)
+
+            chat_message = await asyncio.to_thread(dechiffrer_bytes_secrete, decryption_key, content['encrypted_content'])
+            if chat_history:
+                chat_messages = await asyncio.to_thread(dechiffrer_document_secrete, decryption_key, chat_history)
+            else:
+                chat_messages = list()
+
+            # Add the new user message to the history of chat messages
+            chat_messages.append({'role': chat_role, 'content': chat_message.decode('utf-8')})
 
             action = message.routage['action']
 
@@ -163,11 +175,10 @@ class QueryHandler:
             done_event = asyncio.Event()
             # response_content = await self.query_ollama(action, content, done_event)
             if action == 'chat':
-                chat_messages = content['messages']
-                chat_stream = self.ollama_chat(chat_messages, content['model'], done_event)
+                chat_stream = self.ollama_chat(chat_messages, chat_model, done_event)
             elif action == 'generate':
                 chat_messages = [{'role': 'user', 'content': content['prompt']}]
-                chat_stream = self.ollama_chat(chat_messages, content['model'], done_event)
+                chat_stream = self.ollama_chat(chat_messages, chat_model, done_event)
             else:
                 raise Exception('action %s not supported' % action)
             # response_content = {'message': {'role': 'dummy', 'content': 'NANANA2'}}
@@ -202,13 +213,26 @@ class QueryHandler:
 
                     if done:
                         # Prepare a command to save the complete response, send id as part of last streaming message
-                        message_id = 'TATA'
-
-                        # TODO Reuse decryption key. The key will be used for all messages in this conversation
                         encrypted_command, command_id = await producer.chiffrer(
-                            [enveloppe], ConstantesMilleGrilles.KIND_REPONSE_CHIFFREE, chunk, partition=chat_id)
+                            [enveloppe], ConstantesMilleGrilles.KIND_COMMANDE_INTER_MILLEGRILLE, chunk, cle_secrete=decryption_key)
+                        # Transfer keys and signature for secret key to command
+                        encrypted_command['dechiffrage']['signature'] = dechiffrage['signature']
+                        encrypted_command['dechiffrage']['cles'] = dechiffrage['cles']
 
                         chunk['message_id'] = command_id
+
+                        attachements_echange = {
+                            'query': original_message,
+                        }
+
+                        try:
+                            await producer.executer_commande(encrypted_command, 'AiLanguage', 'chatExchange',
+                                                             exchange=ConstantesMilleGrilles.SECURITE_PROTEGE,
+                                                             attachements=attachements_echange, noformat=True, timeout=2)
+                            chunk['chat_exchange_persisted'] = True
+                        except asyncio.TimeoutError:
+                            # Failure to save command, relay to user
+                            chunk['chat_exchange_persisted'] = False
 
                     reponse_tuple = await producer.chiffrer([enveloppe], ConstantesMilleGrilles.KIND_REPONSE_CHIFFREE,
                                                             chunk, partition=chat_id)
