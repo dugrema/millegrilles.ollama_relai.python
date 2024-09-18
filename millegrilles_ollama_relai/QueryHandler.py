@@ -8,6 +8,8 @@ from ollama import AsyncClient
 
 from typing import Optional
 
+from millegrilles_messages.chiffrage.Mgs4 import chiffrer_mgs4_bytes_secrete
+from millegrilles_messages.chiffrage.SignatureDomaines import SignatureDomaines
 from millegrilles_messages.messages import Constantes as ConstantesMilleGrilles
 from millegrilles_messages.messages.MessagesModule import MessageWrapper
 from millegrilles_ollama_relai.Context import OllamaRelaiContext
@@ -124,6 +126,7 @@ class QueryHandler:
         original_message = message.original
         # enveloppe = EnveloppeCertificat.from_pem(original_message['certificat'])
         enveloppe = message.certificat
+        user_id = enveloppe.get_user_id
         attachments: dict = original_message['attachements']
         correlation_id = attachments['correlation_id']
         reply_to = attachments['reply_to']
@@ -147,6 +150,8 @@ class QueryHandler:
 
             chat_model = content['model']
             chat_role = content['role']
+            new_conversation = content.get('new') or False
+            conversation_id = content['conversation_id']
 
             # Recover the keys, send to MaitreDesCles to get the decrypted value
             dechiffrage = {'signature': domain_signature, 'cles': decryption_keys}
@@ -155,6 +160,7 @@ class QueryHandler:
 
             decryption_key = decryption_key_response.parsed['cle_secrete_base64']
             decryption_key: bytes = multibase.decode('m' + decryption_key)
+            cle_id = content['encrypted_content']['cle_id']
 
             chat_message = await asyncio.to_thread(dechiffrer_bytes_secrete, decryption_key, content['encrypted_content'])
             if chat_history:
@@ -212,27 +218,41 @@ class QueryHandler:
                     buffer = ''
 
                     if done:
-                        # Prepare a command to save the complete response, send id as part of last streaming message
-                        encrypted_command, command_id = await producer.chiffrer(
-                            [enveloppe], ConstantesMilleGrilles.KIND_COMMANDE_INTER_MILLEGRILLE, chunk, cle_secrete=decryption_key)
-                        # Transfer keys and signature for secret key to command
-                        encrypted_command['dechiffrage']['signature'] = dechiffrage['signature']
-                        encrypted_command['dechiffrage']['cles'] = dechiffrage['cles']
+                        # Join entire response in single string
+                        complete_response = ''.join(complete_response)
+                        domaine_signature_obj = SignatureDomaines.from_dict(domain_signature)
+                        # cle_id = domaine_signature_obj.get_cle_ref()
 
+                        # Encrypt
+                        cipher, encrypted_response = chiffrer_mgs4_bytes_secrete(decryption_key, complete_response)
+                        encrypted_response['cle_id'] = cle_id
+
+                        reply_command = {
+                            'conversation_id': conversation_id,
+                            'user_id': user_id,
+                            'encrypted_content': encrypted_response,
+                            'new': new_conversation,
+                            'model': chunk['model'],
+                            'role': 'assistant',
+                        }
+                        del original_message['attachements']
+                        attachements_echange = {'query': original_message}
+                        attachements_echange.update(dechiffrage)
+
+                        signed_command, command_id = await producer.signer(
+                            reply_command, ConstantesMilleGrilles.KIND_COMMANDE, 'AiLanguage', 'chatExchange')
                         chunk['message_id'] = command_id
 
-                        attachements_echange = {
-                            'query': original_message,
-                        }
-
                         try:
-                            await producer.executer_commande(encrypted_command, 'AiLanguage', 'chatExchange',
+                            await producer.executer_commande(signed_command, 'AiLanguage', 'chatExchange',
                                                              exchange=ConstantesMilleGrilles.SECURITE_PROTEGE,
                                                              attachements=attachements_echange, noformat=True, timeout=2)
+
                             chunk['chat_exchange_persisted'] = True
                         except asyncio.TimeoutError:
                             # Failure to save command, relay to user
                             chunk['chat_exchange_persisted'] = False
+                            chunk['exchange_command'] = signed_command
 
                     reponse_tuple = await producer.chiffrer([enveloppe], ConstantesMilleGrilles.KIND_REPONSE_CHIFFREE,
                                                             chunk, partition=chat_id)
