@@ -4,9 +4,10 @@ import logging
 
 import httpx
 import multibase
+
 from ollama import AsyncClient
 
-from typing import Optional
+from typing import Optional, Union
 
 from millegrilles_messages.chiffrage.Mgs4 import chiffrer_mgs4_bytes_secrete
 from millegrilles_messages.chiffrage.SignatureDomaines import SignatureDomaines
@@ -25,16 +26,41 @@ class QueryHandler:
         # self.__processing_ids: set[str] = set()
         self.__stop_event: Optional[asyncio.Event] = None
 
+        self.__ollama_status: Union[bool, dict] = False
+
     async def run(self, stop_event: asyncio.Event):
         self.__stop_event = stop_event
         tasks = [
             asyncio.create_task(self.emit_event_thread(self.__waiting_ids, 'attente')),
+            asyncio.create_task(self.ollama_watchdog_thread()),
             # asyncio.create_task(self.emit_event_thread(self.__processing_ids, 'encours')),
         ]
         await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         if self.__stop_event.is_set() is False:
             self.__logger.warning("Threads shutting down")
             self.__stop_event.set()
+
+    async def ollama_watchdog_thread(self):
+        """ Regularly checks status of ollama connection. """
+        while self.__stop_event.is_set() is False:
+            available = self.__ollama_status is not False
+            self.__ollama_status = await self.check_ollama_status()
+            now_available = self.__ollama_status is not False
+
+            if available != now_available:
+                self.__logger.info("ollama Status now %s" % now_available)
+                await self.__context.producer_wait()
+                producer = self.__context.producer
+                status_event = {'event_type': 'availability', 'available': now_available}
+                await producer.emettre_evenement(
+                    status_event, 'ollama_relai', 'status',
+                    exchanges=[ConstantesMilleGrilles.SECURITE_PRIVE])
+
+            try:
+                # Sleep
+                await asyncio.wait_for(self.__stop_event.wait(), 10)
+            except asyncio.TimeoutError:
+                pass
 
     async def emit_event_thread(self, correlations: dict[str, dict], event_name: str):
         # Wait for the initialization of the producer
@@ -285,14 +311,16 @@ class QueryHandler:
         async for part in stream:
             yield part
 
-    async def ollama_ping(self) -> (bool, str):
+    async def check_ollama_status(self) -> Union[bool, dict]:
         client = AsyncClient(host=self.__context.configuration.ollama_url)
         try:
             # Test connection by getting currently loaded model information
-            await client.ps()
-            return True, ''
+            status = await client.ps()
+            return dict(status)
         except httpx.ConnectError:
             # Failed to connect
-            pass
+            return False
 
-        return False, 'ollama connection error'
+    async def ollama_ping(self) -> (bool, str):
+        available = self.__ollama_status is not False
+        return available, ''
