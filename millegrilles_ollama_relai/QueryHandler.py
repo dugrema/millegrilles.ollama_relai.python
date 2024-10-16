@@ -184,9 +184,15 @@ class QueryHandler:
             decryption_key_response = await producer.executer_requete(dechiffrage, 'MaitreDesCles', 'dechiffrageMessage',
                                                                       exchange=ConstantesMilleGrilles.SECURITE_PROTEGE)
 
-            decryption_key = decryption_key_response.parsed['cle_secrete_base64']
-            decryption_key: bytes = multibase.decode('m' + decryption_key)
             cle_id = content['encrypted_content']['cle_id']
+            try:
+                decryption_key = decryption_key_response.parsed['cle_secrete_base64']
+                decryption_key: bytes = multibase.decode('m' + decryption_key)
+            except KeyError as e:
+                self.__logger.error("Error receing key cle_id:%s\nRequest: %s\nResponse: %s" % (cle_id, dechiffrage, decryption_key_response))
+                await producer.repondre({'ok': False, 'err': 'Error decrypting key'},
+                                        correlation_id=correlation_id, reply_to=reply_to)
+                raise e
 
             chat_message = await asyncio.to_thread(dechiffrer_bytes_secrete, decryption_key, content['encrypted_content'])
             if chat_history:
