@@ -60,6 +60,7 @@ class CommandHandler(CommandesAbstract):
         res_volatil.ajouter_rk(ConstantesMilleGrilles.SECURITE_PRIVE, 'commande.ollama_relai.generate')
         res_volatil.ajouter_rk(ConstantesMilleGrilles.SECURITE_PRIVE, 'commande.ollama_relai.chat')
         res_volatil.ajouter_rk(ConstantesMilleGrilles.SECURITE_PRIVE, 'requete.ollama_relai.ping')
+        res_volatil.ajouter_rk(ConstantesMilleGrilles.SECURITE_PRIVE, 'requete.ollama_relai.getModels')
 
         self.__messages_thread.ajouter_consumer(res_volatil)
 

@@ -102,6 +102,9 @@ class QueryHandler:
         if action == 'ping':
             available, message = await self.ollama_ping()
             return {'ok': available, 'err': message}
+        elif action == 'getModels':
+            models = await self.check_ollama_list_models()
+            return {'ok': True, 'models': models}
 
         raise Exception('Unknown request: %s' % action)
 
@@ -323,6 +326,20 @@ class QueryHandler:
             # Test connection by getting currently loaded model information
             status = await client.ps()
             return dict(status)
+        except httpx.ConnectError:
+            # Failed to connect
+            return False
+
+    async def check_ollama_list_models(self) -> Union[bool, list]:
+        client = AsyncClient(host=self.__context.configuration.ollama_url)
+        try:
+            # Test connection by getting currently loaded model information
+            models = await client.list()
+            model_list = list()
+            for model in models['models']:
+                name = model['name']
+                model_list.append({'name': name})
+            return model_list
         except httpx.ConnectError:
             # Failed to connect
             return False
