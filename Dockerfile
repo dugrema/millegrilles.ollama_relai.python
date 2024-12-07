@@ -27,4 +27,4 @@ RUN pip3 install --no-cache-dir -r $BUILD_FOLDER/requirements.txt && \
     cd $BUILD_FOLDER/  && \
     python3 ./setup.py install
 
-CMD ["-m", "millegrilles_ollama_relai", "--verbose"]
+CMD ["-m", "millegrilles_ollama_relai"]
