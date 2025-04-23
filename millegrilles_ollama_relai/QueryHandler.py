@@ -1,6 +1,7 @@
 import asyncio
 import datetime
 import logging
+import tempfile
 from asyncio import TaskGroup
 
 import httpx
@@ -15,14 +16,16 @@ from millegrilles_messages.chiffrage.SignatureDomaines import SignatureDomaines
 from millegrilles_messages.messages import Constantes as ConstantesMilleGrilles
 from millegrilles_messages.messages.MessagesModule import MessageWrapper
 from millegrilles_messages.chiffrage.DechiffrageUtils import dechiffrer_bytes_secrete, dechiffrer_document_secrete
+from millegrilles_ollama_relai.AttachmentHandler import AttachmentHandler
 from millegrilles_ollama_relai.OllamaContext import OllamaContext
 
 
 class QueryHandler:
 
-    def __init__(self, context: OllamaContext):
+    def __init__(self, context: OllamaContext, attachment_handler: AttachmentHandler):
         self.__logger = logging.getLogger(__name__ + '.' + self.__class__.__name__)
         self.__context = context
+        self.__attachment_handler = attachment_handler
         self.__waiting_ids: dict[str, dict] = dict()  # Key = chat_id, value = {reply_to, correlation_id}
 
         self.__ollama_status: Union[bool, dict] = False
@@ -141,6 +144,7 @@ class QueryHandler:
         chat_history: Optional[dict] = attachments['history']
         decryption_keys = attachments['keys']
         domain_signature = attachments['signature']
+        attached_files = message.parsed.get('attachments')
 
         producer = await self.__context.get_producer()
 
@@ -184,12 +188,38 @@ class QueryHandler:
 
             chat_message = await asyncio.to_thread(dechiffrer_bytes_secrete, decryption_key, content['encrypted_content'])
             if chat_history:
-                chat_messages = await asyncio.to_thread(dechiffrer_document_secrete, decryption_key, chat_history)
+                encrypted_content = await asyncio.to_thread(dechiffrer_document_secrete, decryption_key, chat_history)
+                chat_messages = encrypted_content.get('messageHistory') or list()
+                attachment_keys = encrypted_content.get('attachmentKeys')
             else:
                 chat_messages = list()
+                attachment_keys = None
+
+            image_attachments = None
+            if attached_files is not None and attachment_keys is not None:
+                # Process and download files
+                for attached_file in attached_files:
+                    mimetype: str = attached_file['mimetype']
+                    key_id = attached_file['keyId']
+                    decryption_key_attached_file: str = attachment_keys[key_id]
+                    with tempfile.TemporaryFile('wb+') as tmp_file:
+                        if mimetype.startswith('image/'):
+                            file_size = await self.__attachment_handler.download_decrypt_file(decryption_key_attached_file,
+                                                                                              attached_file, tmp_file)
+                            if image_attachments is None:
+                                image_attachments = list()
+
+                            content = await self.__attachment_handler.prepare_image(file_size, tmp_file)
+                            image_attachments.append(content)
+                        else:
+                            raise NotImplementedError('File type not handled')
+                pass
 
             # Add the new user message to the history of chat messages
-            chat_messages.append({'role': chat_role, 'content': chat_message.decode('utf-8')})
+            current_chat_message = {'role': chat_role, 'content': chat_message.decode('utf-8')}
+            if image_attachments is not None:
+                current_chat_message['images'] = image_attachments
+            chat_messages.append(current_chat_message)
 
             action = message.routage['action']
 
