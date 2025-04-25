@@ -1,6 +1,6 @@
 FROM docker.maple.maceroc.com:5000/millegrilles_messages_python:2024.9.91
 
-ARG VBUILD=2024.6.0
+ARG VBUILD=2025.3.0
 
 ENV CERT_PATH=/run/secrets/cert.pem \
     KEY_PATH=/run/secrets/key.pem \
@@ -15,6 +15,10 @@ EXPOSE 80 443
 
 # Creer repertoire app, copier fichiers
 COPY . $BUILD_FOLDER
+
+RUN apt update && \
+    apt install -y poppler-utils && \
+    apt clean
 
 # Pour offline build
 #ENV PIP_FIND_LINKS=$BUILD_FOLDER/pip \

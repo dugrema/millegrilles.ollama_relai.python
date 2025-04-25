@@ -1,7 +1,10 @@
 import asyncio
 import datetime
 import logging
+import os
 import tempfile
+import subprocess
+
 from asyncio import TaskGroup
 
 import httpx
@@ -133,6 +136,8 @@ class QueryHandler:
         chat_id = message.id
         # original_message: MessageWrapper = self.__waiting_ids[chat_id]['original']
 
+        max_context_length = 512000  # Avoid sending huge documents
+
         # Extract encryption and routing information for the response
         original_message = message.original
         # enveloppe = EnveloppeCertificat.from_pem(original_message['certificat'])
@@ -181,7 +186,7 @@ class QueryHandler:
                 decryption_key = decryption_key_response.parsed['cle_secrete_base64']
                 decryption_key: bytes = multibase.decode('m' + decryption_key)
             except KeyError as e:
-                self.__logger.error("Error receing key cle_id:%s\nRequest: %s\nResponse: %s" % (cle_id, dechiffrage, decryption_key_response))
+                self.__logger.error("Error receving key cle_id:%s\nRequest: %s\nResponse: %s" % (cle_id, dechiffrage, decryption_key_response))
                 await producer.reply({'ok': False, 'err': 'Error decrypting key'},
                                      correlation_id=correlation_id, reply_to=reply_to)
                 return False
@@ -195,6 +200,8 @@ class QueryHandler:
                 chat_messages = list()
                 attachment_keys = None
 
+            current_message_content = chat_message.decode('utf-8')
+
             image_attachments = None
             if attached_files is not None and attachment_keys is not None:
                 # Process and download files
@@ -203,7 +210,19 @@ class QueryHandler:
                     key_id = attached_file['keyId']
                     decryption_key_attached_file: str = attachment_keys[key_id]
                     with tempfile.TemporaryFile('wb+') as tmp_file:
-                        if mimetype.startswith('image/'):
+                        if mimetype == 'application/pdf':
+                            await self.__attachment_handler.download_decrypt_file(decryption_key_attached_file,
+                                                                                  attached_file, tmp_file)
+                            text_content = await extract_pdf_content(tmp_file)
+                            if text_content is not None:
+                                if len(current_message_content) > max_context_length:
+                                    # Truncate to avoid exceeding context
+                                    current_message_content += "\nPDF file (truncated):\n\n" + text_content
+                                    current_message_content = current_message_content[0:max_context_length]
+                                else:
+                                    current_message_content += "\nPDF file full content:\n\n" + text_content
+
+                        elif mimetype.startswith('image/'):
                             file_size = await self.__attachment_handler.download_decrypt_file(decryption_key_attached_file,
                                                                                               attached_file, tmp_file)
                             if image_attachments is None:
@@ -216,7 +235,7 @@ class QueryHandler:
                 pass
 
             # Add the new user message to the history of chat messages
-            current_chat_message = {'role': chat_role, 'content': chat_message.decode('utf-8')}
+            current_chat_message = {'role': chat_role, 'content': current_message_content}
             if image_attachments is not None:
                 current_chat_message['images'] = image_attachments
             chat_messages.append(current_chat_message)
@@ -359,3 +378,22 @@ class QueryHandler:
     async def ollama_ping(self) -> (bool, str):
         available = self.__ollama_status is not False
         return available, ''
+
+async def extract_pdf_content(tmp_file: tempfile.TemporaryFile) -> Optional[str]:
+
+    # Create named output file to use with pdftotext - todo, check how to use asyncio.subprocess and pipes
+    with tempfile.NamedTemporaryFile('wb') as pdf_in:
+        output_text_name = pdf_in.name + '.txt'
+        tmp_file.seek(0)
+        await asyncio.to_thread(pdf_in.write, tmp_file.read())
+        await asyncio.to_thread(pdf_in.flush)
+        await asyncio.to_thread(subprocess.run, ['/usr/bin/pdftotext', pdf_in.name, output_text_name])
+
+    # Read the output text into variable
+    with open(output_text_name, 'r') as file_in:
+        content = await asyncio.to_thread(file_in.read)
+
+    # Cleanup text file
+    await asyncio.to_thread(os.unlink, output_text_name)
+
+    return content
