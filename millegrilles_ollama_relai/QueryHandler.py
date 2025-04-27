@@ -201,11 +201,18 @@ class QueryHandler:
                 attachment_keys = None
 
             current_message_content = chat_message.decode('utf-8')
+            attached_tuuids: Optional[list[str]] = None
 
             image_attachments = None
             if attached_files is not None and attachment_keys is not None:
                 # Process and download files
                 for attached_file in attached_files:
+
+                    # Keep track of attached files for conversation
+                    if attached_tuuids is None:
+                        attached_tuuids = list()
+                    attached_tuuids.append(attached_file['tuuid'])
+
                     mimetype: str = attached_file['mimetype']
                     key_id = attached_file['keyId']
                     decryption_key_attached_file: str = attachment_keys[key_id]
@@ -304,6 +311,8 @@ class QueryHandler:
                             'model': chunk['model'],
                             'role': 'assistant',
                         }
+                        if attached_tuuids is not None:
+                            reply_command['tuuids'] = attached_tuuids
                         del original_message['attachements']
                         attachements_echange = {'query': original_message}
                         attachements_echange.update(dechiffrage)
