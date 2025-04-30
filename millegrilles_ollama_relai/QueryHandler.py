@@ -33,6 +33,17 @@ class QueryHandler:
 
         self.__ollama_status: Union[bool, dict] = False
 
+    def __get_async_client(self) -> AsyncClient:
+        configuration = self.__context.configuration
+        connection_url = self.__context.configuration.ollama_url
+        if connection_url.lower().startswith('https://'):
+            # Use a millegrille certificate authentication
+            cert = (configuration.cert_path, configuration.key_path)
+            client = AsyncClient(host=self.__context.configuration.ollama_url, verify=configuration.ca_path, cert=cert)
+        else:
+            client = AsyncClient(host=self.__context.configuration.ollama_url)
+        return client
+
     async def run(self):
         async with TaskGroup() as group:
             group.create_task(self.emit_event_thread(self.__waiting_ids, 'attente'))
@@ -350,7 +361,7 @@ class QueryHandler:
                 pass  # Ok, could have been cancelled
 
     async def ollama_chat(self, messages: list[dict], model: str, done: asyncio.Event):
-        client = AsyncClient(host=self.__context.configuration.ollama_url)
+        client = self.__get_async_client()
         stream = await client.chat(
             model=model,
             messages=messages,
@@ -361,7 +372,7 @@ class QueryHandler:
             yield part
 
     async def check_ollama_status(self) -> Union[bool, dict]:
-        client = AsyncClient(host=self.__context.configuration.ollama_url)
+        client = self.__get_async_client()
         try:
             # Test connection by getting currently loaded model information
             status = await client.ps()
@@ -371,7 +382,7 @@ class QueryHandler:
             return False
 
     async def check_ollama_list_models(self) -> Union[bool, list]:
-        client = AsyncClient(host=self.__context.configuration.ollama_url)
+        client = self.__get_async_client()
         try:
             # Test connection by getting currently loaded model information
             models = await client.list()
