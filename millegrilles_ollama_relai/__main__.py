@@ -8,12 +8,13 @@ from typing import Awaitable
 from millegrilles_messages.bus.BusContext import ForceTerminateExecution, StopListener
 from millegrilles_messages.bus.PikaConnector import MilleGrillesPikaConnector
 from millegrilles_ollama_relai.AttachmentHandler import AttachmentHandler
+from millegrilles_ollama_relai.DocumentIndexHandler import DocumentIndexHandler
 from millegrilles_ollama_relai.MgbusHandler import MgbusHandler
 from millegrilles_ollama_relai.OllamaChatHandler import OllamaChatHandler
 from millegrilles_ollama_relai.OllamaConfiguration import OllamaConfiguration
 from millegrilles_ollama_relai.OllamaContext import OllamaContext
 from millegrilles_ollama_relai.OllamaManager import OllamaManager
-from millegrilles_ollama_relai.QueryHandler import QueryHandler
+from millegrilles_ollama_relai.MessageHandler import MessageHandler
 
 LOGGER = logging.getLogger(__name__)
 
@@ -59,16 +60,18 @@ async def wiring(context: OllamaContext) -> list[Awaitable]:
     context.bus_connector = bus_connector
     attachment_handler = AttachmentHandler(context)
     chat_handler = OllamaChatHandler(context, attachment_handler)
-    query_handler = QueryHandler(context, chat_handler)
+    document_handler = DocumentIndexHandler(context, attachment_handler)
+    query_handler = MessageHandler(context, chat_handler, document_handler)
 
     # Facade
-    manager = OllamaManager(context, query_handler, attachment_handler, chat_handler)
+    manager = OllamaManager(context, query_handler, attachment_handler, chat_handler, document_handler)
 
     # Access modules
     bus_handler = MgbusHandler(manager)
 
     # Setup, injecting additional dependencies
     await manager.setup()  # Create folders for other modules
+    await document_handler.setup()  # Connect to local vector DB
 
     # Create tasks
     coros = [
@@ -77,6 +80,7 @@ async def wiring(context: OllamaContext) -> list[Awaitable]:
         manager.run(),
         bus_handler.run(),
         chat_handler.run(),
+        document_handler.run(),
     ]
 
     return coros
@@ -85,48 +89,3 @@ async def wiring(context: OllamaContext) -> list[Awaitable]:
 if __name__ == '__main__':
     asyncio.run(main())
     LOGGER.info("Stopped")
-
-
-# import argparse
-# import asyncio
-# import logging
-#
-# from millegrilles_ollama_relai.OllamaRelai import run
-# from millegrilles_ollama_relai.Configuration import parse_args
-# from millegrilles_ollama_relai.Context import OllamaRelaiContext
-#
-#
-# def main():
-#     """
-#     :return:
-#     """
-#     logging_setup()
-#
-#     # Parse command line, load configuration and create context object
-#     configuration, args = parse_args()
-#     adjust_logging(args)
-#     context = OllamaRelaiContext(configuration)
-#
-#     # Run
-#     asyncio.run(run(context))
-#
-#
-# def logging_setup():
-#     logging.basicConfig(level=logging.ERROR)
-#     logging.getLogger(__name__).setLevel(logging.WARN)
-#     logging.getLogger('millegrilles_messages').setLevel(logging.WARN)
-#     logging.getLogger('millegrilles_ollama_relai').setLevel(logging.INFO)
-#
-#
-# def adjust_logging(args: argparse.Namespace):
-#     if args.verbose:
-#         # Set millegrilles modules logging to verbose
-#         logging.getLogger('millegrilles_messages').setLevel(logging.DEBUG)
-#         logging.getLogger('millegrilles_ollama_relai').setLevel(logging.DEBUG)
-#
-#         # Confirmation
-#         logging.getLogger('millegrilles_ollama_relai').debug("** Verbose logging **")
-#
-#
-# if __name__ == '__main__':
-#     main()

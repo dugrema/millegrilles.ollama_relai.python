@@ -117,6 +117,13 @@ def create_volatile_q_channel(context: MilleGrillesBusContext,
     q_instance.add_routing_key(RoutingKey(
         Constantes.SECURITE_PRIVE, f'requete.{OllamaConstants.DOMAIN_OLLAMA_RELAI}.getModels'))
 
+    if context.configuration.rag_active:  # RAG (document index)
+        q_instance.add_routing_key(RoutingKey(
+            Constantes.SECURITE_PROTEGE, f'commande.{OllamaConstants.DOMAIN_OLLAMA_RELAI}.indexDocuments'))
+        q_instance.add_routing_key(RoutingKey(
+            Constantes.SECURITE_PRIVE, f'requete.{OllamaConstants.DOMAIN_OLLAMA_RELAI}.queryDocuments'))
+
+
     q_channel.add_queue(q_instance)
     return q_channel
 

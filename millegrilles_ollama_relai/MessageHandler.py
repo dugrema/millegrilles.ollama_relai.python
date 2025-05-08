@@ -7,16 +7,18 @@ from typing import Union
 
 from millegrilles_messages.messages import Constantes as ConstantesMilleGrilles
 from millegrilles_messages.messages.MessagesModule import MessageWrapper
+from millegrilles_ollama_relai.DocumentIndexHandler import DocumentIndexHandler
 from millegrilles_ollama_relai.OllamaChatHandler import OllamaChatHandler
 from millegrilles_ollama_relai.OllamaContext import OllamaContext
 
 
-class QueryHandler:
+class MessageHandler:
 
-    def __init__(self, context: OllamaContext, chat_handler: OllamaChatHandler):
+    def __init__(self, context: OllamaContext, chat_handler: OllamaChatHandler, document_handler: DocumentIndexHandler):
         self.__logger = logging.getLogger(__name__ + '.' + self.__class__.__name__)
         self.__context = context
         self.__chat_handler = chat_handler
+        self.__document_handler = document_handler
         # self.__attachment_handler = attachment_handler
         # self.__waiting_ids: dict[str, dict] = dict()  # Key = chat_id, value = {reply_to, correlation_id}
 
@@ -81,7 +83,7 @@ class QueryHandler:
         action = rk_split.pop()
 
         if type_message != 'requete':
-            raise Exception('Wrong message kind, must be command')
+            raise Exception('Wrong message kind, must be request')
 
         if domaine != 'ollama_relai':
             raise Exception('Domaine must be ollama_relai')
@@ -92,12 +94,12 @@ class QueryHandler:
         elif action == 'getModels':
             models = await self.check_ollama_list_models()
             return {'ok': True, 'models': models}
+        elif action == 'queryDocuments':
+            return self.__document_handler.query_documents(message)
 
-        raise Exception('Unknown request: %s' % action)
+        return {'ok': False, 'code': 404, 'err': 'Unknown action'}
 
-    async def handle_query(self, message: MessageWrapper):
-        producer = await self.__context.get_producer()
-
+    async def handle_commands(self, message: MessageWrapper):
         # Confirm routing key
         rk_split = message.routing_key.split('.')
         type_message = rk_split[0]
@@ -113,31 +115,10 @@ class QueryHandler:
         if action == 'chat':
             await self.__chat_handler.register_query(message)
             return False  # We'll stream the messages, no automatic response here
-        elif action == 'indexDocument':
-            await self.__chat_handler.register_query(message)
-            return False  # We'll stream the messages, no automatic response here
-        else:
-            # if action not in ['chat', 'generate']:
-            raise Exception('Actions can only be one of: chat')
+        elif action == 'indexDocuments':
+            return await self.__document_handler.index_documents(message)
 
-        # # Start emitting "waiting" events to tell the client it is still queued-up (keep-alive)
-        # chat_id = message.id
-        # self.__waiting_ids[chat_id] = {'reply_to': message.reply_to, 'correlation_id': message.correlation_id}
-        #
-        # # Re-emit the message on the traitement Q
-        # attachements = {'correlation_id': message.correlation_id, 'reply_to': message.reply_to}
-        # attachements.update(message.original['attachements'])
-        # await producer.command(
-        #     message.original, domain='ollama_relai', action='traitement', exchange=ConstantesMilleGrilles.SECURITE_PROTEGE,
-        #     noformat=True, nowait=True, attachments=attachements)
-        #
-        # await producer.reply(
-        #     {'ok': True, 'partition': chat_id, 'stream': True, 'reponse': 1},
-        #     reply_to=message.reply_to, correlation_id=message.correlation_id,
-        #     attachments={'streaming': True}
-        # )
-        #
-        # return False  # We'll stream the messages, no automatic response here
+        return {'ok': False, 'code': 404, 'err': 'Unknown action'}
 
     async def check_ollama_status(self) -> Union[bool, dict]:
         client = self.__context.get_async_client()

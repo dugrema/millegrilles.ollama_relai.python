@@ -7,19 +7,22 @@ from typing import Callable, Awaitable, Optional
 from millegrilles_messages.messages.MessagesModule import MessageWrapper
 from millegrilles_messages.structs.Filehost import Filehost
 from millegrilles_ollama_relai.AttachmentHandler import AttachmentHandler
+from millegrilles_ollama_relai.DocumentIndexHandler import DocumentIndexHandler
 from millegrilles_ollama_relai.OllamaChatHandler import OllamaChatHandler
 from millegrilles_ollama_relai.OllamaContext import OllamaContext
-from millegrilles_ollama_relai.QueryHandler import QueryHandler
+from millegrilles_ollama_relai.MessageHandler import MessageHandler
 
 
 class OllamaManager:
 
-    def __init__(self, context: OllamaContext, query_handler: QueryHandler, attachment_handler: AttachmentHandler, chat_handler: OllamaChatHandler):
+    def __init__(self, context: OllamaContext, query_handler: MessageHandler, attachment_handler: AttachmentHandler,
+                 chat_handler: OllamaChatHandler, document_handler: DocumentIndexHandler):
         self.__logger = logging.getLogger(__name__+'.'+self.__class__.__name__)
         self.__context = context
         self.__query_handler = query_handler
         self.__attachment_handler = attachment_handler
         self.__chat_handler = chat_handler
+        self.__document_handler = document_handler
 
         self.__filehost_listeners: list[Callable[[Optional[Filehost]], Awaitable[None]]] = list()
 
@@ -33,7 +36,6 @@ class OllamaManager:
         configuration = self.__context.configuration
         dir_rag = pathlib.Path(configuration.dir_rag)
         dir_rag.mkdir(parents=True, exist_ok=True)
-        pass
 
     async def run(self):
         self.__logger.debug("OllamaManager Starting")
@@ -81,7 +83,7 @@ class OllamaManager:
         return await self.__query_handler.handle_requests(message)
 
     async def handle_volalile_query(self, message: MessageWrapper):
-        return await self.__query_handler.handle_query(message)
+        return await self.__query_handler.handle_commands(message)
 
     async def process_chat(self, message: MessageWrapper):
         return await self.__chat_handler.process_chat(message)
