@@ -7,17 +7,19 @@ from typing import Callable, Awaitable, Optional
 from millegrilles_messages.messages.MessagesModule import MessageWrapper
 from millegrilles_messages.structs.Filehost import Filehost
 from millegrilles_ollama_relai.AttachmentHandler import AttachmentHandler
+from millegrilles_ollama_relai.OllamaChatHandler import OllamaChatHandler
 from millegrilles_ollama_relai.OllamaContext import OllamaContext
 from millegrilles_ollama_relai.QueryHandler import QueryHandler
 
 
 class OllamaManager:
 
-    def __init__(self, context: OllamaContext, query_handler: QueryHandler, attachment_handler: AttachmentHandler):
+    def __init__(self, context: OllamaContext, query_handler: QueryHandler, attachment_handler: AttachmentHandler, chat_handler: OllamaChatHandler):
         self.__logger = logging.getLogger(__name__+'.'+self.__class__.__name__)
         self.__context = context
         self.__query_handler = query_handler
         self.__attachment_handler = attachment_handler
+        self.__chat_handler = chat_handler
 
         self.__filehost_listeners: list[Callable[[Optional[Filehost]], Awaitable[None]]] = list()
 
@@ -81,5 +83,5 @@ class OllamaManager:
     async def handle_volalile_query(self, message: MessageWrapper):
         return await self.__query_handler.handle_query(message)
 
-    async def process_query(self, message: MessageWrapper):
-        return await self.__query_handler.process_query(message)
+    async def process_chat(self, message: MessageWrapper):
+        return await self.__chat_handler.process_chat(message)

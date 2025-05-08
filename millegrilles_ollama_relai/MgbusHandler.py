@@ -90,10 +90,13 @@ class MgbusHandler:
 
         action = message.routage['action']
 
-        if action in ['generate', 'chat']:
-            return await self.__manager.process_query(message)
+        if action == 'chat':
+            return await self.__manager.process_chat(message)
+        #if action in ['generate', 'chat']:
+        #    return await self.__manager.process_query(message)
 
         self.__logger.info("__on_processing_message Ignoring unknown action %s", message.routing_key)
+        return {'ok': False, 'code': 404, 'err': 'Unknown operation'}
 
 
 def create_volatile_q_channel(context: MilleGrillesBusContext,

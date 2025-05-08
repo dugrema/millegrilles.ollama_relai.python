@@ -9,6 +9,7 @@ from millegrilles_messages.bus.BusContext import ForceTerminateExecution, StopLi
 from millegrilles_messages.bus.PikaConnector import MilleGrillesPikaConnector
 from millegrilles_ollama_relai.AttachmentHandler import AttachmentHandler
 from millegrilles_ollama_relai.MgbusHandler import MgbusHandler
+from millegrilles_ollama_relai.OllamaChatHandler import OllamaChatHandler
 from millegrilles_ollama_relai.OllamaConfiguration import OllamaConfiguration
 from millegrilles_ollama_relai.OllamaContext import OllamaContext
 from millegrilles_ollama_relai.OllamaManager import OllamaManager
@@ -57,10 +58,11 @@ async def wiring(context: OllamaContext) -> list[Awaitable]:
     bus_connector = MilleGrillesPikaConnector(context)
     context.bus_connector = bus_connector
     attachment_handler = AttachmentHandler(context)
-    query_handler = QueryHandler(context, attachment_handler)
+    chat_handler = OllamaChatHandler(context, attachment_handler)
+    query_handler = QueryHandler(context, chat_handler)
 
     # Facade
-    manager = OllamaManager(context, query_handler, attachment_handler)
+    manager = OllamaManager(context, query_handler, attachment_handler, chat_handler)
 
     # Access modules
     bus_handler = MgbusHandler(manager)
@@ -74,6 +76,7 @@ async def wiring(context: OllamaContext) -> list[Awaitable]:
         query_handler.run(),
         manager.run(),
         bus_handler.run(),
+        chat_handler.run(),
     ]
 
     return coros

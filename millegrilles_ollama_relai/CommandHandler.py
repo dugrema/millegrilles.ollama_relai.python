@@ -106,8 +106,8 @@ class CommandHandler(CommandesAbstract):
         except ExtensionNotFound:
             delegation_globale = None
 
-        if q == 'ollama_relai/traitement':
-            return await self.__query_handler.process_query(message)
+        # if q == 'ollama_relai/traitement':
+        #     return await self.__query_handler.handle_query(message)
 
         if domaine == 'ollama_relai':
             if type_message == 'evenement':
@@ -116,3 +116,5 @@ class CommandHandler(CommandesAbstract):
                 return await self.__query_handler.handle_query(message)
             elif type_message == 'requete':
                 return await self.__query_handler.handle_requests(message)
+
+        return {'ok': False, 'err': "Unsupported domain/action"}
