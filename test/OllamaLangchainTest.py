@@ -7,7 +7,7 @@ from langchain_ollama import OllamaEmbeddings
 from langchain_core.retrievers import RetrieverLike
 from langchain_chroma import Chroma
 from langchain_community.document_loaders import PyPDFLoader
-from langchain_text_splitters import TextSplitter, CharacterTextSplitter, RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 documents = [
   "Llamas are members of the camelid family meaning they're pretty closely related to vicuñas and camels",
@@ -51,11 +51,13 @@ async def connect_vector_db() -> RetrieverLike:
         # num_gpu=0,  # Disable GPU to avoid swapping models on ollama
     )
 
-    path_db = pathlib.Path("/tmp/chroma_langchain_db")
+    # path_db = pathlib.Path("/tmp/chroma_langchain_db")
+    path_db = pathlib.Path("/var/opt/millegrilles/rag/chroma_langchain_db")
     must_populate = path_db.exists() is False
 
     vector_store = Chroma(
-        collection_name="example_collection",
+        # collection_name="example_collection",
+        collection_name="GrosFichiers_hhhpE95wynmj4GzMRMhECzsP2c9SNveq",
         embedding_function=embeddings,
         persist_directory=str(path_db),  # Where to save data locally, remove if not necessary
     )
@@ -91,7 +93,8 @@ async def run_query(retriever: RetrieverLike):
     # query = "How long can a llama live when it is well fed?"
     # query = "What is happening at the Canada Revenue Agency (CRA)?"
     # query = "Quel est le résultat de l'élection pour le Bloc Québécois?"
-    query = "Why does Alberta claim they should get over 50% of the CPP?"
+    # query = "Why does Alberta claim they should get over 50% of the CPP?"
+    query = "What happened to Poilievre during the election?"
 
     prompt = await format_prompt(retriever, query)
     print("Prompt:\n%s" % prompt)

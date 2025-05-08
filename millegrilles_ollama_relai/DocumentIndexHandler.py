@@ -1,10 +1,16 @@
 import asyncio
 import logging
+import pathlib
 import tempfile
+
 from asyncio import TaskGroup
 from typing import Optional, TypedDict
 
-import multibase
+from langchain_chroma import Chroma
+from langchain_core.vectorstores import VectorStore
+from langchain_ollama import OllamaEmbeddings
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from millegrilles_messages.chiffrage.DechiffrageUtils import dechiffrer_document_secrete
 from millegrilles_messages.messages import Constantes
@@ -18,12 +24,13 @@ from millegrilles_ollama_relai.Util import decode_base64_nopad
 class FileInformation(TypedDict):
     tuuid: str
     user_id: str
+    domain: str
     metadata: dict
     mimetype: Optional[str]
     version: Optional[dict]
     key: dict
     decrypted_metadata: Optional[dict]
-    tmp_file: Optional[tempfile.TemporaryFile]
+    tmp_file: Optional[tempfile.NamedTemporaryFile]
 
 
 class DocumentIndexHandler:
@@ -108,7 +115,7 @@ class DocumentIndexHandler:
                 mimetype = mimetype.lower()
                 if mimetype in ['application/pdf']:
                     # Download file
-                    tmp_file = tempfile.TemporaryFile(mode='wb+')
+                    tmp_file = tempfile.NamedTemporaryFile(mode='wb+')
                     try:
                         filesize = await self.__attachment_handler.download_decrypt_file(secret_key_str, version, tmp_file)
                         self.__logger.debug(f"Downloaded {filesize} bytes for file {filename}")
@@ -128,7 +135,6 @@ class DocumentIndexHandler:
                 self.__logger.debug("Triggering fetch of new batch of files for RAG (empty intake queue)")
                 self.__event_fetch_jobs.set()
 
-
     async def __index_thread(self):
         while self.__context.stopping is False:
             job: Optional[FileInformation] = await self.__indexing_queue.get()
@@ -137,12 +143,15 @@ class DocumentIndexHandler:
 
             tuuid = job['tuuid']
             user_id = job['user_id']
+            domain = job['domain']
             metadata = job['decrypted_metadata']
             filename = metadata['nom']
             self.__logger.debug(f"Indexing file {filename} with RAG")
 
             tmp_file = job.get('tmp_file')
             if tmp_file:
+                vector_store = await asyncio.to_thread(self.open_vector_store, domain, user_id)
+                await asyncio.to_thread(index_pdf_file, vector_store, tuuid, tmp_file)
                 self.__logger.debug("Closing tmp file")
                 tmp_file.close()
             else:
@@ -179,6 +188,7 @@ class DocumentIndexHandler:
             info: FileInformation = {
                 'tuuid': lease['tuuid'],
                 'user_id': lease['user_id'],
+                'domain': Constantes.DOMAINE_GROS_FICHIERS,
                 'metadata': lease['metadata'],
                 'mimetype': lease.get('mimetype'),
                 'version': lease.get('version'),
@@ -190,3 +200,38 @@ class DocumentIndexHandler:
             await self.__intake_queue.put(info)
 
         pass
+
+    def open_vector_store(self, domain: str, user_id: str) -> VectorStore:
+        user_id_trunc = user_id[-32:]
+        collection_name = f'{domain}_{user_id_trunc}'
+        embeddings = OllamaEmbeddings(
+            model="all-minilm",
+            # model="llama3.2:3b-instruct-q8_0",
+            # num_gpu=0,  # Disable GPU to avoid swapping models on ollama
+        )
+
+        configuration = self.__context.configuration
+        path_db = pathlib.Path(configuration.dir_rag, "chroma_langchain_db")
+        path_db.mkdir(exist_ok=True)
+
+        vector_store = Chroma(
+            collection_name=collection_name,
+            embedding_function=embeddings,
+            persist_directory=str(path_db),  # Where to save data locally, remove if not necessary
+        )
+
+        return vector_store
+
+
+def index_pdf_file(vector_store: VectorStore, tuuid: str, tmp_file: tempfile.NamedTemporaryFile):
+    loader = PyPDFLoader(tmp_file.name, mode="single")
+    document_list = loader.load()
+    document = document_list[0]
+    splitter = RecursiveCharacterTextSplitter(chunk_size=2000, chunk_overlap=400)
+    chunks = splitter.split_documents([document])
+    chunk_no = 1
+    for chunk in chunks:
+        doc_id = f"{tuuid}/{chunk_no}"
+        chunk_no += 1
+        chunk.id = doc_id
+    vector_store.add_documents(list(chunks))
