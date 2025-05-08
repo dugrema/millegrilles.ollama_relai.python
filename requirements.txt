@@ -3,4 +3,4 @@ ollama==0.3.3
 langchain_core==0.3.59
 langchain-ollama==0.3.2
 langchain_chroma==0.2.3
-
+langchain_community==0.3.23

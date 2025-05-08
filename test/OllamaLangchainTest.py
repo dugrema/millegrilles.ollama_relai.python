@@ -6,6 +6,8 @@ from langchain_core.documents import Document
 from langchain_ollama import OllamaEmbeddings
 from langchain_core.retrievers import RetrieverLike
 from langchain_chroma import Chroma
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_text_splitters import TextSplitter, CharacterTextSplitter, RecursiveCharacterTextSplitter
 
 documents = [
   "Llamas are members of the camelid family meaning they're pretty closely related to vicuñas and camels",
@@ -26,6 +28,20 @@ async def populate_vector_db(vector_store: Chroma):
         await vector_store.aadd_documents([Document(doc, id=doc_id)])
         doc_id_ctn += 1
 
+    pdf_path = pathlib.Path('/home/mathieu/Downloads/Articles')
+    for pdf_file in pdf_path.iterdir():
+        loader = PyPDFLoader(pdf_file, mode="single")
+        document_list = await asyncio.to_thread(loader.load)
+        document = document_list[0]
+        splitter = RecursiveCharacterTextSplitter(chunk_size=2000, chunk_overlap=400)
+        chunks = splitter.split_documents([document])
+        chunk_no = 1
+        for chunk in chunks:
+            doc_id = f"6f79b693-c2f8-4315-96a1-0435b579ad{doc_id_ctn}/{chunk_no}"
+            chunk_no += 1
+            chunk.id = doc_id
+        await vector_store.aadd_documents(list(chunks))
+        doc_id_ctn += 1
 
 
 async def connect_vector_db() -> RetrieverLike:
@@ -70,9 +86,12 @@ async def ollama_generate(prompt: str):
 async def run_query(retriever: RetrieverLike):
     # query = "What animals are llamas related to?"
     # query = "How tall can a llama get?"
-    query = "What do llamas eat?"
+    # query = "What do llamas eat?"
     # query = "What is the size and weight of a llama?"
     # query = "How long can a llama live when it is well fed?"
+    # query = "What is happening at the Canada Revenue Agency (CRA)?"
+    # query = "Quel est le résultat de l'élection pour le Bloc Québécois?"
+    query = "Why does Alberta claim they should get over 50% of the CPP?"
 
     prompt = await format_prompt(retriever, query)
     print("Prompt:\n%s" % prompt)
@@ -83,7 +102,7 @@ async def run_query(retriever: RetrieverLike):
 
 
 async def format_prompt(retriever: RetrieverLike, query: str) -> str:
-    context_response = await retriever.ainvoke(query)
+    context_response = await retriever.ainvoke(query, k=6)
 
     context_tags = [f'<source id="{elem.id}">{elem.page_content}</source>' for elem in context_response]
 
