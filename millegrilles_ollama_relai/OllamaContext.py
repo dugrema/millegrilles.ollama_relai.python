@@ -100,13 +100,27 @@ class OllamaContext(MilleGrillesBusContext):
             raise ValueError("No valid URL")
         return url, tls_method
 
-    def get_async_client(self) -> AsyncClient:
+    def get_client_options(self) -> dict:
         configuration = self.configuration
         connection_url = self.configuration.ollama_url
         if connection_url.lower().startswith('https://'):
             # Use a millegrille certificate authentication
             cert = (configuration.cert_path, configuration.key_path)
-            client = AsyncClient(host=self.configuration.ollama_url, verify=configuration.ca_path, cert=cert)
+            params = {'host':self.configuration.ollama_url, 'verify':configuration.ca_path, 'cert':cert}
         else:
-            client = AsyncClient(host=self.configuration.ollama_url)
-        return client
+            params = {'host':self.configuration.ollama_url, 'verify':configuration.ca_path}
+        return params
+
+    def get_async_client(self) -> AsyncClient:
+        options = self.get_client_options()
+        # configuration = self.configuration
+        # connection_url = self.configuration.ollama_url
+        # if connection_url.lower().startswith('https://'):
+        #     # Use a millegrille certificate authentication
+        #     cert = (configuration.cert_path, configuration.key_path)
+        #     client = AsyncClient(host=self.configuration.ollama_url, verify=configuration.ca_path, cert=cert)
+        # else:
+        #     client = AsyncClient(host=self.configuration.ollama_url)
+        # return client
+        return AsyncClient(**options)
+

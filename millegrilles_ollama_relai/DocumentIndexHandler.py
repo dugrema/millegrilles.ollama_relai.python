@@ -35,8 +35,10 @@ class FileInformation(TypedDict):
     tmp_file: Optional[tempfile.NamedTemporaryFile]
 
 CONTEXT_LEN = 4096
-DOC_LEN = 1000
-
+DOC_LEN = 1024
+DOC_OVERLAP = math.floor(DOC_LEN / 20)
+# EMBEDDING_MODEL = "all-minilm"
+EMBEDDING_MODEL = "nomic-embed-text:137m-v1.5-fp16"
 
 class DocumentIndexHandler:
 
@@ -252,10 +254,15 @@ class DocumentIndexHandler:
         # Collection name must be between 3 and 63 chars, truncate the user_id to the last 32 chars
         user_id_trunc = user_id[-32:]
         collection_name = f'{domain}_{user_id_trunc}'
+        options = self.__context.get_client_options()
+        base_url = options['host']
+        del options['host']
         embeddings = OllamaEmbeddings(
-            model="all-minilm",
+            model=EMBEDDING_MODEL,
+            base_url=base_url,
             # model="llama3.2:3b-instruct-q8_0",
             # num_gpu=0,  # Disable GPU to avoid swapping models on ollama
+            client_kwargs=options,
         )
 
         configuration = self.__context.configuration
@@ -275,7 +282,7 @@ def index_pdf_file(vector_store: VectorStore, tuuid: str, filename: str, tmp_fil
     loader = PyPDFLoader(tmp_file.name, mode="single")
     document_list = loader.load()
     document = document_list[0]
-    splitter = RecursiveCharacterTextSplitter(chunk_size=DOC_LEN, chunk_overlap=250)
+    splitter = RecursiveCharacterTextSplitter(chunk_size=DOC_LEN, chunk_overlap=DOC_OVERLAP)
     chunks = splitter.split_documents([document])
     chunk_no = 1
     for chunk in chunks:
