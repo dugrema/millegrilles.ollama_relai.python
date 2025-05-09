@@ -13,7 +13,7 @@ from langchain_ollama import OllamaEmbeddings
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from millegrilles_messages.chiffrage.DechiffrageUtils import dechiffrer_document_secrete
+from millegrilles_messages.chiffrage.DechiffrageUtils import dechiffrer_document_secrete, dechiffrer_bytes_secrete
 from millegrilles_messages.messages import Constantes
 
 from millegrilles_messages.messages.MessagesModule import MessageWrapper
@@ -50,18 +50,24 @@ class DocumentIndexHandler:
     async def setup(self):
         pass
 
-    async def index_documents(self, message: MessageWrapper):
-        # Fetch the file
-        with tempfile.TemporaryFile(mode="wb+") as tmp_file:
-            tmp_file.seek(0)
-            async with self.__semaphore_db:
-                raise NotImplementedError("TODO")
-
-            # return {"ok": False}
-
     async def query_rag(self, message: MessageWrapper) -> Union[dict, bool]:
-        # TODO: Decrypt query
-        query = message.parsed['query']
+        # Recover the keys, send to MaitreDesCles to get the decrypted value
+        encrypted_query = message.parsed['encrypted_query']
+        domain_signature = encrypted_query['key']['signature']
+        decryption_keys = encrypted_query['key']['keys']
+        dechiffrage = {'signature': domain_signature, 'cles': decryption_keys}
+        producer = await self.__context.get_producer()
+        try:
+            decryption_key_response = await producer.request(
+                dechiffrage, 'MaitreDesCles', 'dechiffrageMessage',
+                exchange=Constantes.SECURITE_PROTEGE, timeout=3)
+        except asyncio.TimeoutError:
+            self.__logger.error("Error getting conversation decryption key for AI chat message")
+            return {'ok': False, 'err': 'Timeout getting decryption key'}
+
+        decryption_key: bytes = decode_base64_nopad(decryption_key_response.parsed['cle_secrete_base64'])
+        query_bytes = await asyncio.to_thread(dechiffrer_bytes_secrete, decryption_key, encrypted_query)
+        query = query_bytes.decode('utf-8')
         user_id = message.certificat.get_user_id
 
         if user_id is None:
@@ -72,10 +78,11 @@ class DocumentIndexHandler:
         client = self.__context.get_async_client()
         async with self.__context.ollama_http_semaphore:
             prompt, doc_ref = await format_prompt(retriever, query)
+            self.__logger.debug(f"PROMPT (len:{len(prompt)})\n{prompt}")
             response = await client.generate(
                 model="llama3.2:3b-instruct-q8_0",
                 prompt=prompt,
-                options={"temperature": 0.0}
+                options={"temperature": 0.0, "num_ctx": 5120}
             )
 
         response = {'ok': True, 'response': response['response'], 'ref': doc_ref}
@@ -104,7 +111,7 @@ class DocumentIndexHandler:
     async def __query_thread(self):
         while self.__context.stopping is False:
             self.__event_fetch_jobs.clear()
-            if self.__indexing_queue.qsize() < 2:
+            if self.__intake_queue.qsize() < 2:
                 # Try to fetch more items
                 self.__logger.debug("Triggering fetch of new batch of files for RAG (low/empty intake queue)")
                 try:
@@ -254,7 +261,7 @@ def index_pdf_file(vector_store: VectorStore, tuuid: str, filename: str, tmp_fil
     loader = PyPDFLoader(tmp_file.name, mode="single")
     document_list = loader.load()
     document = document_list[0]
-    splitter = RecursiveCharacterTextSplitter(chunk_size=2000, chunk_overlap=400)
+    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=250)
     chunks = splitter.split_documents([document])
     chunk_no = 1
     for chunk in chunks:
@@ -265,7 +272,7 @@ def index_pdf_file(vector_store: VectorStore, tuuid: str, filename: str, tmp_fil
     vector_store.add_documents(list(chunks))
 
 
-async def format_prompt(retriever: RetrieverLike, query: str, limit=10) -> (str, list[dict]):
+async def format_prompt(retriever: RetrieverLike, query: str, limit=15) -> (str, list[dict]):
     context_response = await retriever.ainvoke(query, k=limit)
 
     doc_ref = list()
@@ -298,13 +305,13 @@ If the user asks about a specific topic and the information is found in a source
 ### Output:
 Provide a clear and direct response to the user's query, including inline citations in the format [id] only when the <source> tag with id attribute is present in the context.
 
-<context>
-{"\n".join(context_tags)}
-</context>
-
 <user_query>
 {query}
 </user_query>    
+
+<context>
+{"\n".join(context_tags)}
+</context>
     """
 
     return prompt, doc_ref

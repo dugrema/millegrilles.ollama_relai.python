@@ -105,7 +105,7 @@ async def run_query(retriever: RetrieverLike):
 
 
 async def format_prompt(retriever: RetrieverLike, query: str) -> str:
-    context_response = await retriever.ainvoke(query, k=6)
+    context_response = await retriever.ainvoke(query, k=4)
 
     context_tags = [f'<source id="{elem.id}">{elem.page_content}</source>' for elem in context_response]
 
