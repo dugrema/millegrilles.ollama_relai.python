@@ -35,6 +35,7 @@ class FileInformation(TypedDict):
     decrypted_metadata: Optional[dict]
     tmp_file: Optional[tempfile.NamedTemporaryFile]
 
+QUERY_BATCH_RAG_LEN = 30
 CONTEXT_LEN = 4096
 DOC_LEN = 1024
 DOC_OVERLAP = math.floor(DOC_LEN / 20)
@@ -51,7 +52,7 @@ class DocumentIndexHandler:
         self.__semaphore_db = asyncio.BoundedSemaphore(1)
         self.__event_fetch_jobs = asyncio.Event()
 
-        self.__intake_queue: asyncio.Queue[Optional[FileInformation]] = asyncio.Queue(maxsize=10)
+        self.__intake_queue: asyncio.Queue[Optional[FileInformation]] = asyncio.Queue(maxsize=2*QUERY_BATCH_RAG_LEN)
         self.__indexing_queue: asyncio.Queue[Optional[FileInformation]] = asyncio.Queue(maxsize=2)
 
         self.__vector_store_cache: dict[str, VectorStore] = dict()
@@ -225,7 +226,7 @@ class DocumentIndexHandler:
 
     async def __query_batch_rag(self):
         producer = await self.__context.get_producer()
-        response = await producer.command({"batch_size": 5}, Constantes.DOMAINE_GROS_FICHIERS, "leaseForRag", Constantes.SECURITE_PROTEGE)
+        response = await producer.command({"batch_size": QUERY_BATCH_RAG_LEN}, Constantes.DOMAINE_GROS_FICHIERS, "leaseForRag", Constantes.SECURITE_PROTEGE)
         parsed = response.parsed
         if parsed['ok'] is not True:
             self.__logger.warning("Error retrieving batch of files for RAG: %s" % parsed)
