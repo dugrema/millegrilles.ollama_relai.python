@@ -164,7 +164,10 @@ class DocumentIndexHandler:
                     # Download file
                     tmp_file = tempfile.NamedTemporaryFile(mode='wb+')
                     try:
-                        filesize = await self.__attachment_handler.download_decrypt_file(secret_key_str, version, tmp_file)
+                        # Combine version and key to ensure legacy decryption info is available
+                        info_decryption = version.copy()
+                        info_decryption.update(job['key'])
+                        filesize = await self.__attachment_handler.download_decrypt_file(secret_key_str, info_decryption, tmp_file)
                         self.__logger.debug(f"Downloaded {filesize} bytes for file {filename}")
                     except:
                         tmp_file.close()
@@ -212,7 +215,6 @@ class DocumentIndexHandler:
             command = {"tuuid": tuuid, "user_id": user_id}
             await producer.command(command, Constantes.DOMAINE_GROS_FICHIERS, "confirmRag", Constantes.SECURITE_PROTEGE)
 
-
     async def __query_batch_rag(self):
         producer = await self.__context.get_producer()
         response = await producer.command({"batch_size": 5}, Constantes.DOMAINE_GROS_FICHIERS, "leaseForRag", Constantes.SECURITE_PROTEGE)
@@ -231,7 +233,11 @@ class DocumentIndexHandler:
 
         for lease in leases:
             metadata = lease['metadata']
-            cle_id = metadata.get('cle_id') or metadata['ref_hachage_bytes']
+            version = lease.get('version')
+            fuuid: Optional[str] = None
+            if version:
+                fuuid = version['fuuid']
+            cle_id = metadata.get('cle_id') or metadata.get('ref_hachage_bytes') or fuuid
 
             key = [k for k in secret_keys if k['cle_id'] == cle_id].pop()
 
