@@ -200,8 +200,11 @@ class DocumentIndexHandler:
                     vector_store = await asyncio.to_thread(self.open_vector_store, domain, user_id)
                     async with self.__context.ollama_http_semaphore:
                         await asyncio.to_thread(index_pdf_file, vector_store, tuuid, filename, tmp_file)
+                except ValueError:
+                    self.__logger.exception(f"Error processing file tuuid {tuuid}), rejecting")
+                    pass  # The file will be marked as processed later on
                 except:
-                    self.__logger.exception(f"Error processing file {filename} (tuuid {tuuid}), will retry")
+                    self.__logger.exception(f"Error processing file tuuid {tuuid}, will retry")
                     continue
                 finally:
                     self.__logger.debug("Closing tmp file")

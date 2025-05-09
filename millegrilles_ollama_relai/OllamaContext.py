@@ -106,9 +106,9 @@ class OllamaContext(MilleGrillesBusContext):
         if connection_url.lower().startswith('https://'):
             # Use a millegrille certificate authentication
             cert = (configuration.cert_path, configuration.key_path)
-            params = {'host':self.configuration.ollama_url, 'verify':configuration.ca_path, 'cert':cert}
+            params = {'host':connection_url, 'verify':configuration.ca_path, 'cert':cert}
         else:
-            params = {'host':self.configuration.ollama_url, 'verify':configuration.ca_path}
+            params = {'host':connection_url}
         return params
 
     def get_async_client(self) -> AsyncClient:
@@ -122,5 +122,7 @@ class OllamaContext(MilleGrillesBusContext):
         # else:
         #     client = AsyncClient(host=self.configuration.ollama_url)
         # return client
-        return AsyncClient(**options)
-
+        # host = options['host']
+        # del options['host']
+        # return AsyncClient(host=host, **options)
+        return AsyncClient(host=options['host'], verify=options.get('verify'), cert=options.get('cert'))
