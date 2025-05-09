@@ -2,6 +2,7 @@ import asyncio
 import logging
 import pathlib
 import tempfile
+import math
 
 from asyncio import TaskGroup
 from typing import Optional, TypedDict, Union
@@ -32,6 +33,9 @@ class FileInformation(TypedDict):
     key: dict
     decrypted_metadata: Optional[dict]
     tmp_file: Optional[tempfile.NamedTemporaryFile]
+
+CONTEXT_LEN = 4096
+DOC_LEN = 1000
 
 
 class DocumentIndexHandler:
@@ -80,12 +84,14 @@ class DocumentIndexHandler:
         retriever = vector_store.as_retriever()
         client = self.__context.get_async_client()
         async with self.__context.ollama_http_semaphore:
-            prompt, doc_ref = await format_prompt(retriever, query)
+            # Calculate doc limit using 3 * context chars
+            limit = math.floor(CONTEXT_LEN * 3 / DOC_LEN)
+            prompt, doc_ref = await format_prompt(retriever, query, limit)
             self.__logger.debug(f"PROMPT (len:{len(prompt)})\n{prompt}")
             response = await client.generate(
                 model="llama3.2:3b-instruct-q8_0",
                 prompt=prompt,
-                options={"temperature": 0.0, "num_ctx": 5120}
+                options={"temperature": 0.0, "num_ctx": CONTEXT_LEN}
             )
 
         response = {'ok': True, 'response': response['response'], 'ref': doc_ref}
@@ -132,6 +138,10 @@ class DocumentIndexHandler:
 
     async def __intake_thread(self):
         while self.__context.stopping is False:
+            # Trigger fetch
+            self.__event_fetch_jobs.set()
+
+            # Wait for jobs
             job = await self.__intake_queue.get()
             if job is None:
                 return  # Stopping
@@ -156,7 +166,8 @@ class DocumentIndexHandler:
                         self.__logger.debug(f"Downloaded {filesize} bytes for file {filename}")
                     except:
                         tmp_file.close()
-                        self.__logger.exception("Error downloading file")
+                        self.__logger.exception("Error downloading file, will retry")
+                        continue  # Ignore this file for now, don't mark it processed
 
                     # Process decrypted file
                     tmp_file.seek(0)
@@ -164,9 +175,6 @@ class DocumentIndexHandler:
 
             # Pass content on to indexing
             await self.__indexing_queue.put(job)
-
-            # Trigger fetch
-            self.__event_fetch_jobs.set()
 
     async def __index_thread(self):
         while self.__context.stopping is False:
@@ -187,6 +195,9 @@ class DocumentIndexHandler:
                     vector_store = await asyncio.to_thread(self.open_vector_store, domain, user_id)
                     async with self.__context.ollama_http_semaphore:
                         await asyncio.to_thread(index_pdf_file, vector_store, tuuid, filename, tmp_file)
+                except:
+                    self.__logger.exception(f"Error processing file {filename} (tuuid {tuuid}), will retry")
+                    continue
                 finally:
                     self.__logger.debug("Closing tmp file")
                     tmp_file.close()
@@ -264,7 +275,7 @@ def index_pdf_file(vector_store: VectorStore, tuuid: str, filename: str, tmp_fil
     loader = PyPDFLoader(tmp_file.name, mode="single")
     document_list = loader.load()
     document = document_list[0]
-    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=250)
+    splitter = RecursiveCharacterTextSplitter(chunk_size=DOC_LEN, chunk_overlap=250)
     chunks = splitter.split_documents([document])
     chunk_no = 1
     for chunk in chunks:
@@ -275,7 +286,7 @@ def index_pdf_file(vector_store: VectorStore, tuuid: str, filename: str, tmp_fil
     vector_store.add_documents(list(chunks))
 
 
-async def format_prompt(retriever: RetrieverLike, query: str, limit=12) -> (str, list[dict]):
+async def format_prompt(retriever: RetrieverLike, query: str, limit: int) -> (str, list[dict]):
     context_response = await retriever.ainvoke(query, k=limit)
 
     doc_ref = list()
