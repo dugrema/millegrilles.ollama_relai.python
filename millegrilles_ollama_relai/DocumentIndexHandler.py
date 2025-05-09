@@ -50,6 +50,9 @@ class DocumentIndexHandler:
     async def setup(self):
         pass
 
+    async def trigger_indexing(self):
+        self.__event_fetch_jobs.set()
+
     async def query_rag(self, message: MessageWrapper) -> Union[dict, bool]:
         # Recover the keys, send to MaitreDesCles to get the decrypted value
         encrypted_query = message.parsed['encrypted_query']
@@ -103,7 +106,7 @@ class DocumentIndexHandler:
     async def __trigger_fetch_interval(self):
         while self.__context.stopping is False:
             self.__event_fetch_jobs.set()
-            await self.__context.wait(30)
+            await self.__context.wait(300)  # Trigger once every 5 minutes
 
         # Unblock the query thread
         self.__event_fetch_jobs.set()
@@ -272,7 +275,7 @@ def index_pdf_file(vector_store: VectorStore, tuuid: str, filename: str, tmp_fil
     vector_store.add_documents(list(chunks))
 
 
-async def format_prompt(retriever: RetrieverLike, query: str, limit=15) -> (str, list[dict]):
+async def format_prompt(retriever: RetrieverLike, query: str, limit=12) -> (str, list[dict]):
     context_response = await retriever.ainvoke(query, k=limit)
 
     doc_ref = list()
@@ -305,13 +308,13 @@ If the user asks about a specific topic and the information is found in a source
 ### Output:
 Provide a clear and direct response to the user's query, including inline citations in the format [id] only when the <source> tag with id attribute is present in the context.
 
-<user_query>
-{query}
-</user_query>    
-
 <context>
 {"\n".join(context_tags)}
 </context>
+
+<user_query>
+{query}
+</user_query>    
     """
 
     return prompt, doc_ref

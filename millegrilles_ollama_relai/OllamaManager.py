@@ -87,3 +87,6 @@ class OllamaManager:
 
     async def process_chat(self, message: MessageWrapper):
         return await self.__chat_handler.process_chat(message)
+
+    async def trigger_rag_indexing(self):
+        await self.__document_handler.trigger_indexing()

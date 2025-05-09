@@ -65,10 +65,17 @@ class MgbusHandler:
         except ExtensionNotFound:
             roles = list()
 
+        message_type = message.routing_key.split('.')[0]
+        domain = message.routage['domaine']
+        action = message.routage['action']
+
+        if message_type == 'evenement':
+            if domain == 'filecontroler' and action == 'filehostNewFuuid':
+                await self.__manager.trigger_rag_indexing()
+                return False
+
         if Constantes.ROLE_USAGER not in roles:
             return {'ok': False, 'code': 403, 'err': 'Acces denied'}
-
-        action = message.routage['action']
 
         if action in ['chat']:
             return await self.__manager.handle_volalile_query(message)
@@ -122,6 +129,8 @@ def create_volatile_q_channel(context: MilleGrillesBusContext,
             Constantes.SECURITE_PROTEGE, f'commande.{OllamaConstants.DOMAIN_OLLAMA_RELAI}.indexDocuments'))
         q_instance.add_routing_key(RoutingKey(
             Constantes.SECURITE_PRIVE, f'requete.{OllamaConstants.DOMAIN_OLLAMA_RELAI}.queryRag'))
+        q_instance.add_routing_key(RoutingKey(
+            Constantes.SECURITE_PUBLIC, 'evenement.filecontroler.filehostNewFuuid'))
 
 
     q_channel.add_queue(q_instance)
