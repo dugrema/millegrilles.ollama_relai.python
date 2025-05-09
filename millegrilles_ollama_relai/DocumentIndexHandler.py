@@ -230,7 +230,8 @@ class DocumentIndexHandler:
         self.__logger.debug(f"Received batch of files {len(leases)} for RAG indexing")
 
         for lease in leases:
-            cle_id = lease['metadata']['cle_id']
+            metadata = lease['metadata']
+            cle_id = metadata.get('cle_id') or metadata['ref_hachage_bytes']
 
             key = [k for k in secret_keys if k['cle_id'] == cle_id].pop()
 
@@ -238,7 +239,7 @@ class DocumentIndexHandler:
                 'tuuid': lease['tuuid'],
                 'user_id': lease['user_id'],
                 'domain': Constantes.DOMAINE_GROS_FICHIERS,
-                'metadata': lease['metadata'],
+                'metadata': metadata,
                 'mimetype': lease.get('mimetype'),
                 'version': lease.get('version'),
                 'key': key,
