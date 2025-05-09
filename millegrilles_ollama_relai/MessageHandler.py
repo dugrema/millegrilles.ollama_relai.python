@@ -3,7 +3,7 @@ import httpx
 
 from asyncio import TaskGroup
 from ollama import AsyncClient
-from typing import Union
+from typing import Union, Mapping, Any, Optional
 
 from millegrilles_messages.messages import Constantes as ConstantesMilleGrilles
 from millegrilles_messages.messages.MessagesModule import MessageWrapper
@@ -23,6 +23,7 @@ class MessageHandler:
         # self.__waiting_ids: dict[str, dict] = dict()  # Key = chat_id, value = {reply_to, correlation_id}
 
         self.__ollama_status: Union[bool, dict] = False
+        self.__ollama_models: Optional[Mapping[str, Any]] = None
 
     def get_async_client(self) -> AsyncClient:
         return self.__context.get_async_client()
@@ -45,7 +46,7 @@ class MessageHandler:
         """ Regularly checks status of ollama connection. """
         while self.__context.stopping is False:
             available = self.__ollama_status is not False
-            self.__ollama_status = await self.check_ollama_status()
+            await self.check_ollama_status()
             now_available = self.__ollama_status is not False
 
             if available != now_available:
@@ -120,21 +121,25 @@ class MessageHandler:
 
         return {'ok': False, 'code': 404, 'err': 'Unknown action'}
 
-    async def check_ollama_status(self) -> Union[bool, dict]:
+    async def check_ollama_status(self):
         client = self.__context.get_async_client()
         try:
             # Test connection by getting currently loaded model information
-            status = await client.ps()
-            return dict(status)
+            async with self.__context.ollama_http_semaphore:
+                self.__ollama_status = await client.ps()
+                self.__ollama_models = await client.list()
+            # return dict(status), models
         except httpx.ConnectError:
             # Failed to connect
-            return False
+            self.__ollama_status = False
 
     async def check_ollama_list_models(self) -> Union[bool, list]:
-        client = self.__context.get_async_client()
+        # client = self.__context.get_async_client()
         try:
             # Test connection by getting currently loaded model information
-            models = await client.list()
+            # async with self.__context.ollama_http_semaphore:
+            #     models = await client.list()
+            models = self.__ollama_models
             model_list = list()
             for model in models['models']:
                 name = model['name']

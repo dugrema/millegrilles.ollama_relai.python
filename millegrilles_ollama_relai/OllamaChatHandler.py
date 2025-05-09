@@ -180,9 +180,9 @@ class OllamaChatHandler:
             # response_content = await self.query_ollama(action, content, done_event)
             if action == 'chat':
                 chat_stream = self.ollama_chat(chat_messages, chat_model, done_event)
-            elif action == 'generate':
-                chat_messages = [{'role': 'user', 'content': content['prompt']}]
-                chat_stream = self.ollama_chat(chat_messages, chat_model, done_event)
+            # elif action == 'generate':
+            #     chat_messages = [{'role': 'user', 'content': content['prompt']}]
+            #     chat_stream = self.ollama_chat(chat_messages, chat_model, done_event)
             else:
                 raise Exception('action %s not supported' % action)
             # response_content = {'message': {'role': 'dummy', 'content': 'NANANA2'}}
@@ -273,14 +273,15 @@ class OllamaChatHandler:
 
     async def ollama_chat(self, messages: list[dict], model: str, done: asyncio.Event):
         client = self.__context.get_async_client()
-        stream = await client.chat(
-            model=model,
-            messages=messages,
-            stream=True,
-        )
+        async with self.__context.ollama_http_semaphore:
+            stream = await client.chat(
+                model=model,
+                messages=messages,
+                stream=True,
+            )
 
-        async for part in stream:
-            yield part
+            async for part in stream:
+                yield part
 
     async def emit_event_thread(self, correlations: dict[str, dict], event_name: str):
         # Wait for the initialization of the producer

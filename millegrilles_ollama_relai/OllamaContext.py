@@ -1,3 +1,5 @@
+import asyncio
+
 import aiohttp
 import logging
 import ssl
@@ -26,6 +28,8 @@ class OllamaContext(MilleGrillesBusContext):
         self.__filehost_url: Optional[str] = None
         self.__tls_method: Optional[str] = None
         self.__ssl_context_filehost: Optional[ssl.SSLContext] = None
+        # Semaphore to only allow 1 http request at a time to the Ollama backend
+        self.__ollama_http_semaphore = asyncio.BoundedSemaphore(1)
 
     @property
     def configuration(self) -> OllamaConfiguration:
@@ -41,6 +45,10 @@ class OllamaContext(MilleGrillesBusContext):
 
     async def get_producer(self):
         return await self.__bus_connector.get_producer()
+
+    @property
+    def ollama_http_semaphore(self) -> asyncio.BoundedSemaphore:
+        return self.__ollama_http_semaphore
 
     @property
     def filehost(self) -> Optional[Filehost]:

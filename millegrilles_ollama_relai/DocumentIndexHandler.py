@@ -152,7 +152,8 @@ class DocumentIndexHandler:
             if tmp_file:
                 try:
                     vector_store = await asyncio.to_thread(self.open_vector_store, domain, user_id)
-                    await asyncio.to_thread(index_pdf_file, vector_store, tuuid, tmp_file)
+                    async with self.__context.ollama_http_semaphore:
+                        await asyncio.to_thread(index_pdf_file, vector_store, tuuid, filename, tmp_file)
                 finally:
                     self.__logger.debug("Closing tmp file")
                     tmp_file.close()
@@ -204,6 +205,7 @@ class DocumentIndexHandler:
         pass
 
     def open_vector_store(self, domain: str, user_id: str) -> VectorStore:
+        # Collection name must be between 3 and 63 chars, truncate the user_id to the last 32 chars
         user_id_trunc = user_id[-32:]
         collection_name = f'{domain}_{user_id_trunc}'
         embeddings = OllamaEmbeddings(
@@ -225,7 +227,7 @@ class DocumentIndexHandler:
         return vector_store
 
 
-def index_pdf_file(vector_store: VectorStore, tuuid: str, tmp_file: tempfile.NamedTemporaryFile):
+def index_pdf_file(vector_store: VectorStore, tuuid: str, filename: str, tmp_file: tempfile.NamedTemporaryFile):
     loader = PyPDFLoader(tmp_file.name, mode="single")
     document_list = loader.load()
     document = document_list[0]
@@ -236,4 +238,5 @@ def index_pdf_file(vector_store: VectorStore, tuuid: str, tmp_file: tempfile.Nam
         doc_id = f"{tuuid}/{chunk_no}"
         chunk_no += 1
         chunk.id = doc_id
+        chunk.metadata['source'] = filename
     vector_store.add_documents(list(chunks))
