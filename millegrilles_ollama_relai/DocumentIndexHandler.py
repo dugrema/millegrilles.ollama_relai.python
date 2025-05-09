@@ -150,10 +150,12 @@ class DocumentIndexHandler:
 
             tmp_file = job.get('tmp_file')
             if tmp_file:
-                vector_store = await asyncio.to_thread(self.open_vector_store, domain, user_id)
-                await asyncio.to_thread(index_pdf_file, vector_store, tuuid, tmp_file)
-                self.__logger.debug("Closing tmp file")
-                tmp_file.close()
+                try:
+                    vector_store = await asyncio.to_thread(self.open_vector_store, domain, user_id)
+                    await asyncio.to_thread(index_pdf_file, vector_store, tuuid, tmp_file)
+                finally:
+                    self.__logger.debug("Closing tmp file")
+                    tmp_file.close()
             else:
                 # Nothing to do
                 pass
