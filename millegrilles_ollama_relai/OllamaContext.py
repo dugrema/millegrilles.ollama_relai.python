@@ -112,17 +112,15 @@ class OllamaContext(MilleGrillesBusContext):
         return params
 
     def get_async_client(self) -> AsyncClient:
-        configuration = self.configuration
-        connection_url = self.configuration.ollama_url
-        if connection_url.lower().startswith('https://'):
-            # Use a millegrille certificate authentication
-            cert = (configuration.cert_path, configuration.key_path)
-            client = AsyncClient(host=self.configuration.ollama_url, verify=configuration.ca_path, cert=cert)
-        else:
-            client = AsyncClient(host=self.configuration.ollama_url)
-        return client
-        # options = self.get_client_options()
-        # host = options['host']
-        # del options['host']
-        # return AsyncClient(host=host, **options)
+        # configuration = self.configuration
+        # connection_url = self.configuration.ollama_url
+        # if connection_url.lower().startswith('https://'):
+        #     # Use a millegrille certificate authentication
+        #     cert = (configuration.cert_path, configuration.key_path)
+        #     client = AsyncClient(host=self.configuration.ollama_url, verify=configuration.ca_path, cert=cert)
+        # else:
+        #     client = AsyncClient(host=self.configuration.ollama_url)
+        # return client
+        options = self.get_client_options()
+        return AsyncClient(**options)
         # return AsyncClient(host=options['host'], verify=options.get('verify'), cert=options.get('cert'))

@@ -103,7 +103,8 @@ class MessageHandler:
                 self.__ollama_status = await client.ps()
                 self.__ollama_models = await client.list()
             # return dict(status), models
-        except httpx.ConnectError:
+        except (httpx.ConnectError, ConnectionError):
+        # except httpx.ConnectError:
             # Failed to connect
             self.__ollama_status = False
 
