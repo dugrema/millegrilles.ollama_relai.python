@@ -117,7 +117,7 @@ class MessageHandler:
             models = self.__ollama_models
             model_list = list()
             for model in models['models']:
-                name = model['name']
+                name = model.model
                 model_list.append({'name': name})
             return model_list
         except httpx.ConnectError:

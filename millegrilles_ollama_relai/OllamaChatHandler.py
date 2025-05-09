@@ -192,6 +192,9 @@ class OllamaChatHandler:
             buffer = ''
             complete_response = []
             async for chunk in chat_stream:
+                chunk = dict(chunk)
+                chunk['message'] = dict(chunk['message'])
+
                 try:
                     # Stop emitting keep-alive messages
                     del self.__waiting_ids[chat_id]
