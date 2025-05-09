@@ -13,6 +13,7 @@ from langchain_core.vectorstores import VectorStore
 from langchain_ollama import OllamaEmbeddings
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from pypdf.errors import PdfStreamError
 
 from millegrilles_messages.chiffrage.DechiffrageUtils import dechiffrer_document_secrete, dechiffrer_bytes_secrete
 from millegrilles_messages.messages import Constantes
@@ -112,6 +113,7 @@ class DocumentIndexHandler:
             group.create_task(self.__intake_thread())
             group.create_task(self.__index_thread())
             group.create_task(self.__trigger_fetch_interval())
+        self.__logger.info("DocumentIndexHandler thread done")
 
     async def __trigger_fetch_interval(self):
         while self.__context.stopping is False:
@@ -203,7 +205,7 @@ class DocumentIndexHandler:
                     vector_store = await asyncio.to_thread(self.open_vector_store, domain, user_id)
                     async with self.__context.ollama_http_semaphore:
                         await asyncio.to_thread(index_pdf_file, vector_store, tuuid, filename, tmp_file)
-                except ValueError:
+                except (ValueError, PdfStreamError):
                     self.__logger.exception(f"Error processing file tuuid {tuuid}), rejecting")
                     pass  # The file will be marked as processed later on
                 except:
