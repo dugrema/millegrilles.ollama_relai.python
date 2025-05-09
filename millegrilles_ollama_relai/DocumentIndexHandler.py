@@ -4,9 +4,10 @@ import pathlib
 import tempfile
 
 from asyncio import TaskGroup
-from typing import Optional, TypedDict
+from typing import Optional, TypedDict, Union
 
 from langchain_chroma import Chroma
+from langchain_core.retrievers import RetrieverLike
 from langchain_core.vectorstores import VectorStore
 from langchain_ollama import OllamaEmbeddings
 from langchain_community.document_loaders import PyPDFLoader
@@ -43,7 +44,7 @@ class DocumentIndexHandler:
         self.__semaphore_db = asyncio.BoundedSemaphore(1)
         self.__event_fetch_jobs = asyncio.Event()
 
-        self.__intake_queue: asyncio.Queue[Optional[FileInformation]] = asyncio.Queue(maxsize=5)
+        self.__intake_queue: asyncio.Queue[Optional[FileInformation]] = asyncio.Queue(maxsize=10)
         self.__indexing_queue: asyncio.Queue[Optional[FileInformation]] = asyncio.Queue(maxsize=2)
 
     async def setup(self):
@@ -58,9 +59,32 @@ class DocumentIndexHandler:
 
             # return {"ok": False}
 
-    async def query_documents(self, message: MessageWrapper):
-        raise NotImplementedError("TODO")
-        # return {"ok": False}
+    async def query_rag(self, message: MessageWrapper) -> Union[dict, bool]:
+        # TODO: Decrypt query
+        query = message.parsed['query']
+        user_id = message.certificat.get_user_id
+
+        if user_id is None:
+            return {'ok': False, 'code': 403, 'err': 'Access denied, no user_id in certificate'}
+
+        vector_store = await asyncio.to_thread(self.open_vector_store, Constantes.DOMAINE_GROS_FICHIERS, user_id)
+        retriever = vector_store.as_retriever()
+        client = self.__context.get_async_client()
+        async with self.__context.ollama_http_semaphore:
+            prompt, doc_ref = await format_prompt(retriever, query)
+            response = await client.generate(
+                model="llama3.2:3b-instruct-q8_0",
+                prompt=prompt,
+                options={"temperature": 0.0}
+            )
+
+        response = {'ok': True, 'response': response['response'], 'ref': doc_ref}
+        producer = await self.__context.get_producer()
+        await producer.encrypt_reply([message.certificat], response,
+                                     correlation_id=message.correlation_id,
+                                     reply_to=message.reply_to)
+
+        return False  # Already replied {'ok': True, 'response': response['response'], 'ref': doc_ref}
 
     async def run(self):
         async with TaskGroup() as group:
@@ -80,8 +104,9 @@ class DocumentIndexHandler:
     async def __query_thread(self):
         while self.__context.stopping is False:
             self.__event_fetch_jobs.clear()
-            if self.__indexing_queue.qsize() < 3:
+            if self.__indexing_queue.qsize() < 2:
                 # Try to fetch more items
+                self.__logger.debug("Triggering fetch of new batch of files for RAG (low/empty intake queue)")
                 try:
                     await self.__query_batch_rag()
                 except asyncio.TimeoutError:
@@ -130,10 +155,8 @@ class DocumentIndexHandler:
             # Pass content on to indexing
             await self.__indexing_queue.put(job)
 
-            # Check if done with queued jobs
-            if self.__intake_queue.qsize() == 0:
-                self.__logger.debug("Triggering fetch of new batch of files for RAG (empty intake queue)")
-                self.__event_fetch_jobs.set()
+            # Trigger fetch
+            self.__event_fetch_jobs.set()
 
     async def __index_thread(self):
         while self.__context.stopping is False:
@@ -240,3 +263,48 @@ def index_pdf_file(vector_store: VectorStore, tuuid: str, filename: str, tmp_fil
         chunk.id = doc_id
         chunk.metadata['source'] = filename
     vector_store.add_documents(list(chunks))
+
+
+async def format_prompt(retriever: RetrieverLike, query: str, limit=10) -> (str, list[dict]):
+    context_response = await retriever.ainvoke(query, k=limit)
+
+    doc_ref = list()
+    for elem in context_response:
+        doc_ref.append({"id": elem.id, "page_content": elem.page_content, "metadata": dict(elem.metadata)})
+
+    # Wrap the documents in <source /> tags with id
+    context_tags = [f'<source id="{elem.id}">{elem.page_content}</source>' for elem in context_response]
+
+    # Prompt source - open-webui (https://openwebui.com/)
+    prompt = f"""
+### Task:
+Respond to the user query using the provided context, incorporating inline citations in the format [id] **only when the <source> tag includes an explicit id attribute** (e.g., <source id="1">).
+
+### Guidelines:
+- If you don't know the answer, clearly state that.
+- If uncertain, ask the user for clarification.
+- Respond in the same language as the user's query.
+- If the context is unreadable or of poor quality, inform the user and provide the best possible answer.
+- If the answer isn't present in the context but you possess the knowledge, explain this to the user and provide the answer using your own understanding.
+- **Only include inline citations using [id] (e.g., [abcd-01], [efgh-22]) when the <source> tag includes an id attribute.**
+- Do not cite if the <source> tag does not contain an id attribute.
+- Do not use XML tags in your response.
+- Ensure citations are concise and directly related to the information provided.
+
+### Example of Citation:
+If the user asks about a specific topic and the information is found in a source with a provided id attribute, the response should include the citation like in the following example:
+* "According to the study, the proposed method increases efficiency by 20% [abcd-01]."
+
+### Output:
+Provide a clear and direct response to the user's query, including inline citations in the format [id] only when the <source> tag with id attribute is present in the context.
+
+<context>
+{"\n".join(context_tags)}
+</context>
+
+<user_query>
+{query}
+</user_query>    
+    """
+
+    return prompt, doc_ref

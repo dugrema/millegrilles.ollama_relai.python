@@ -70,9 +70,9 @@ class MgbusHandler:
 
         action = message.routage['action']
 
-        if action in ['generate', 'chat']:
+        if action in ['chat']:
             return await self.__manager.handle_volalile_query(message)
-        elif action in ['pull', 'ping', 'getModels']:
+        elif action in ['pull', 'ping', 'getModels', 'queryRag']:
             return await self.__manager.handle_volalile_request(message)
 
         self.__logger.info("__on_volatile_message Ignoring unknown action %s", message.routing_key)
@@ -121,7 +121,7 @@ def create_volatile_q_channel(context: MilleGrillesBusContext,
         q_instance.add_routing_key(RoutingKey(
             Constantes.SECURITE_PROTEGE, f'commande.{OllamaConstants.DOMAIN_OLLAMA_RELAI}.indexDocuments'))
         q_instance.add_routing_key(RoutingKey(
-            Constantes.SECURITE_PRIVE, f'requete.{OllamaConstants.DOMAIN_OLLAMA_RELAI}.queryDocuments'))
+            Constantes.SECURITE_PRIVE, f'requete.{OllamaConstants.DOMAIN_OLLAMA_RELAI}.queryRag'))
 
 
     q_channel.add_queue(q_instance)
