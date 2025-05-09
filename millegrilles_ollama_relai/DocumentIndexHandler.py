@@ -53,6 +53,8 @@ class DocumentIndexHandler:
         self.__intake_queue: asyncio.Queue[Optional[FileInformation]] = asyncio.Queue(maxsize=10)
         self.__indexing_queue: asyncio.Queue[Optional[FileInformation]] = asyncio.Queue(maxsize=2)
 
+        self.__vector_store_cache: dict[str, VectorStore] = dict()
+
     async def setup(self):
         pass
 
@@ -114,6 +116,7 @@ class DocumentIndexHandler:
     async def __trigger_fetch_interval(self):
         while self.__context.stopping is False:
             self.__event_fetch_jobs.set()
+            self.__vector_store_cache.clear()  # Rudely clear the cache
             await self.__context.wait(300)  # Trigger once every 5 minutes
 
         # Unblock the query thread
@@ -264,6 +267,11 @@ class DocumentIndexHandler:
         # Collection name must be between 3 and 63 chars, truncate the user_id to the last 32 chars
         user_id_trunc = user_id[-32:]
         collection_name = f'{domain}_{user_id_trunc}'
+
+        vector_store = self.__vector_store_cache.get(collection_name)
+        if vector_store:
+            return vector_store
+
         options = self.__context.get_client_options()
         base_url = options['host']
         del options['host']
@@ -284,6 +292,8 @@ class DocumentIndexHandler:
             embedding_function=embeddings,
             persist_directory=str(path_db),  # Where to save data locally, remove if not necessary
         )
+
+        self.__vector_store_cache[collection_name] = vector_store
 
         return vector_store
 
