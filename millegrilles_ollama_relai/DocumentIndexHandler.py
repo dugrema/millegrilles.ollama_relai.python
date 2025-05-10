@@ -31,7 +31,7 @@ class FileInformation(TypedDict):
     metadata: dict
     mimetype: Optional[str]
     version: Optional[dict]
-    key: dict
+    key: Optional[dict]
     decrypted_metadata: Optional[dict]
     tmp_file: Optional[tempfile.NamedTemporaryFile]
 
@@ -155,34 +155,40 @@ class DocumentIndexHandler:
                 return  # Stopping
 
             # Decrypt all content
-            secret_key_str = job['key']['cle_secrete_base64']
-            secret_key = decode_base64_nopad(secret_key_str)
-            metadata = dechiffrer_document_secrete(secret_key, job['metadata'])
-            filename = metadata['nom']
-            job['decrypted_metadata'] = metadata
+            try:
+                secret_key_str = job['key']['cle_secrete_base64']
+                secret_key = decode_base64_nopad(secret_key_str)
+                metadata = dechiffrer_document_secrete(secret_key, job['metadata'])
+                filename = metadata['nom']
+                job['decrypted_metadata'] = metadata
 
-            mimetype = job.get('mimetype')
-            version = job.get('version')
+                mimetype = job.get('mimetype')
+                version = job.get('version')
+            except KeyError as e:
+                self.__logger.warning(f"__intake_thread Error getting value for tuuid: {job['tuuid']}: {str(e)}, skipping")
+            else:
+                if mimetype and version:
+                    mimetype = mimetype.lower()
+                    if mimetype in ['application/pdf']:
+                        # Download file
+                        tmp_file = tempfile.NamedTemporaryFile(mode='wb+')
+                        try:
+                            # Combine version and key to ensure legacy decryption info is available
+                            info_decryption = version.copy()
+                            info_decryption.update(job['key'])
+                            try:
+                                filesize = await self.__attachment_handler.download_decrypt_file(secret_key_str, info_decryption, tmp_file)
+                                self.__logger.debug(f"Downloaded {filesize} bytes for file {filename}")
+                            except* asyncio.CancelledError:
+                                raise Exception(f"Error downloading fuuid {version['fuuid']}, will retry")
+                        except:
+                            tmp_file.close()
+                            self.__logger.exception("Error downloading file, will retry")
+                            continue  # Ignore this file for now, don't mark it processed
 
-            if mimetype and version:
-                mimetype = mimetype.lower()
-                if mimetype in ['application/pdf']:
-                    # Download file
-                    tmp_file = tempfile.NamedTemporaryFile(mode='wb+')
-                    try:
-                        # Combine version and key to ensure legacy decryption info is available
-                        info_decryption = version.copy()
-                        info_decryption.update(job['key'])
-                        filesize = await self.__attachment_handler.download_decrypt_file(secret_key_str, info_decryption, tmp_file)
-                        self.__logger.debug(f"Downloaded {filesize} bytes for file {filename}")
-                    except:
-                        tmp_file.close()
-                        self.__logger.exception("Error downloading file, will retry")
-                        continue  # Ignore this file for now, don't mark it processed
-
-                    # Process decrypted file
-                    tmp_file.seek(0)
-                    job['tmp_file'] = tmp_file
+                        # Process decrypted file
+                        tmp_file.seek(0)
+                        job['tmp_file'] = tmp_file
 
             # Pass content on to indexing
             await self.__indexing_queue.put(job)
@@ -197,8 +203,11 @@ class DocumentIndexHandler:
             user_id = job['user_id']
             domain = job['domain']
             metadata = job['decrypted_metadata']
-            filename = metadata['nom']
-            self.__logger.debug(f"Indexing file {filename} with RAG")
+            try:
+                filename = metadata['nom']
+                self.__logger.debug(f"Indexing file {filename} with RAG")
+            except KeyError:
+                filename = tuuid
 
             tmp_file = job.get('tmp_file')
             if tmp_file:
@@ -248,7 +257,11 @@ class DocumentIndexHandler:
                 fuuid = version['fuuid']
             cle_id = metadata.get('cle_id') or metadata.get('ref_hachage_bytes') or fuuid
 
-            key = [k for k in secret_keys if k['cle_id'] == cle_id].pop()
+            try:
+                key = [k for k in secret_keys if k['cle_id'] == cle_id].pop()
+            except IndexError:
+                self.__logger.warning(f"Missing key for fuuid {fuuid}, skipping")
+                key = None
 
             info: FileInformation = {
                 'tuuid': lease['tuuid'],
