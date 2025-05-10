@@ -63,7 +63,7 @@ class DocumentIndexHandler:
     async def trigger_indexing(self):
         self.__event_fetch_jobs.set()
 
-    async def query_rag(self, message: MessageWrapper) -> Union[dict, bool]:
+    async def query_rag(self, message: MessageWrapper) -> Optional[dict]:
         # Recover the keys, send to MaitreDesCles to get the decrypted value
         encrypted_query = message.parsed['encrypted_query']
         domain_signature = encrypted_query['key']['signature']
@@ -100,13 +100,17 @@ class DocumentIndexHandler:
                 options={"temperature": 0.0, "num_ctx": CONTEXT_LEN}
             )
 
+        self.__logger.debug("Response: %s" % response['response'])
+        await asyncio.sleep(45)
+        print("GO")
+
         response = {'ok': True, 'response': response['response'], 'ref': doc_ref}
         producer = await self.__context.get_producer()
         await producer.encrypt_reply([message.certificat], response,
                                      correlation_id=message.correlation_id,
                                      reply_to=message.reply_to)
 
-        return False  # Already replied {'ok': True, 'response': response['response'], 'ref': doc_ref}
+        return None  # Already replied
 
     async def run(self):
         async with TaskGroup() as group:

@@ -72,7 +72,7 @@ class MgbusHandler:
         if message_type == 'evenement':
             if domain == 'filecontroler' and action == 'filehostNewFuuid':
                 await self.__manager.trigger_rag_indexing()
-                return False
+                return None
 
         if Constantes.ROLE_USAGER not in roles:
             return {'ok': False, 'code': 403, 'err': 'Acces denied'}
@@ -83,6 +83,7 @@ class MgbusHandler:
             return await self.__manager.handle_volalile_request(message)
 
         self.__logger.info("__on_volatile_message Ignoring unknown action %s", message.routing_key)
+        return {'ok': False, 'code': 404, 'err': 'Unknown operation'}
 
     async def __on_processing_message(self, message: MessageWrapper):
         # Authorization check
