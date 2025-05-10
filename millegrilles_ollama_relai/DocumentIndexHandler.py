@@ -206,7 +206,7 @@ class DocumentIndexHandler:
             try:
                 filename = metadata['nom']
                 self.__logger.debug(f"Indexing file {filename} with RAG")
-            except KeyError:
+            except (TypeError, KeyError):
                 filename = tuuid
 
             tmp_file = job.get('tmp_file')
