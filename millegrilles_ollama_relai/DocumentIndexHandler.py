@@ -101,8 +101,6 @@ class DocumentIndexHandler:
             )
 
         self.__logger.debug("Response: %s" % response['response'])
-        await asyncio.sleep(45)
-        print("GO")
 
         response = {'ok': True, 'response': response['response'], 'ref': doc_ref}
         producer = await self.__context.get_producer()
