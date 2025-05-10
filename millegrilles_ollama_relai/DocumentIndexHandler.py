@@ -178,8 +178,14 @@ class DocumentIndexHandler:
                         try:
                             # Combine version and key to ensure legacy decryption info is available
                             info_decryption = version.copy()
-                            info_decryption.update(job['key'])
-                            info_decryption['format'] = info_decryption.get('format') or 'mgs4'  # Default format
+                            # info_decryption.update(job['key'])
+                            key = job['key']
+                            info_decryption['format'] = info_decryption.get('format') or key.get('format') or 'mgs4'  # Default format
+                            nonce = info_decryption.get('nonce') or key.get('nonce')
+                            if nonce is None:
+                                header = info_decryption.get('header') or key.get('header')
+                                nonce = header[1:]
+                            info_decryption['nonce'] = nonce
                             try:
                                 filesize = await self.__attachment_handler.download_decrypt_file(secret_key_str, info_decryption, tmp_file)
                                 self.__logger.debug(f"Downloaded {filesize} bytes for file {filename}")
