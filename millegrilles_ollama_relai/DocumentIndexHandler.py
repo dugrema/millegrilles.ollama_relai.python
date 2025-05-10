@@ -164,7 +164,7 @@ class DocumentIndexHandler:
 
                 mimetype = job.get('mimetype')
                 version = job.get('version')
-            except KeyError as e:
+            except (TypeError, KeyError) as e:
                 self.__logger.warning(f"__intake_thread Error getting value for tuuid: {job['tuuid']}: {str(e)}, skipping")
             else:
                 if mimetype and version:
