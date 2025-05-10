@@ -164,7 +164,8 @@ class DocumentIndexHandler:
 
                 mimetype = job.get('mimetype')
                 version = job.get('version')
-            except (TypeError, KeyError) as e:
+                fuuid = version['fuuid']
+            except (TypeError, KeyError, UnicodeDecodeError) as e:
                 self.__logger.warning(f"__intake_thread Error getting value for tuuid: {job['tuuid']}: {str(e)}, skipping")
             else:
                 if mimetype and version:
@@ -176,14 +177,15 @@ class DocumentIndexHandler:
                             # Combine version and key to ensure legacy decryption info is available
                             info_decryption = version.copy()
                             info_decryption.update(job['key'])
+                            info_decryption['format'] = info_decryption.get('format') or 'mgs4'  # Default format
                             try:
                                 filesize = await self.__attachment_handler.download_decrypt_file(secret_key_str, info_decryption, tmp_file)
                                 self.__logger.debug(f"Downloaded {filesize} bytes for file {filename}")
                             except* asyncio.CancelledError:
-                                raise Exception(f"Error downloading fuuid {version['fuuid']}, will retry")
+                                raise Exception(f"Error downloading fuuid {fuuid}, will retry")
                         except:
                             tmp_file.close()
-                            self.__logger.exception("Error downloading file, will retry")
+                            self.__logger.exception(f"Error downloading fuuid {fuuid}, will retry")
                             continue  # Ignore this file for now, don't mark it processed
 
                         # Process decrypted file
