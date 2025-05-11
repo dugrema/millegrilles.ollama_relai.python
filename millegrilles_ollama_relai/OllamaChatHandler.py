@@ -275,8 +275,9 @@ class OllamaChatHandler:
                 pass  # Ok, could have been cancelled
 
     async def ollama_chat(self, messages: list[dict], model: str, done: asyncio.Event):
-        client = self.__context.get_async_client()
-        async with self.__context.ollama_http_semaphore:
+        instance = self.__context.pick_ollama_instance(model)
+        client = instance.get_async_client(self.__context.configuration)
+        async with instance.semaphore:
             stream = await client.chat(
                 model=model,
                 messages=messages,

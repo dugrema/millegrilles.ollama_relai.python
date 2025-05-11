@@ -5,7 +5,7 @@ import tempfile
 import math
 
 from asyncio import TaskGroup
-from typing import Optional, TypedDict, Union
+from typing import Optional, TypedDict
 
 from langchain_chroma import Chroma
 from langchain_core.retrievers import RetrieverLike
@@ -20,7 +20,7 @@ from millegrilles_messages.messages import Constantes
 
 from millegrilles_messages.messages.MessagesModule import MessageWrapper
 from millegrilles_ollama_relai.AttachmentHandler import AttachmentHandler
-from millegrilles_ollama_relai.OllamaContext import OllamaContext
+from millegrilles_ollama_relai.OllamaContext import OllamaContext, OllamaInstance
 from millegrilles_ollama_relai.Util import decode_base64_nopad
 
 
@@ -36,11 +36,11 @@ class FileInformation(TypedDict):
     tmp_file: Optional[tempfile.NamedTemporaryFile]
 
 QUERY_BATCH_RAG_LEN = 30
-CONTEXT_LEN = 4096
-DOC_LEN = 1024
-DOC_OVERLAP = math.floor(DOC_LEN / 20)
+# CONTEXT_LEN = 4096
+# DOC_LEN = 1024
+# DOC_OVERLAP = math.floor(DOC_LEN / 20)
 # EMBEDDING_MODEL = "all-minilm"
-EMBEDDING_MODEL = "nomic-embed-text:137m-v1.5-fp16"
+# EMBEDDING_MODEL = "nomic-embed-text:137m-v1.5-fp16"
 
 class DocumentIndexHandler:
 
@@ -86,18 +86,29 @@ class DocumentIndexHandler:
         if user_id is None:
             return {'ok': False, 'code': 403, 'err': 'Access denied, no user_id in certificate'}
 
-        vector_store = await asyncio.to_thread(self.open_vector_store, Constantes.DOMAINE_GROS_FICHIERS, user_id)
-        retriever = vector_store.as_retriever()
-        client = self.__context.get_async_client()
-        async with self.__context.ollama_http_semaphore:
-            # Calculate doc limit using 3 * context chars
-            limit = math.floor(CONTEXT_LEN * 3 / DOC_LEN)
+        rag_configuration = self.__context.rag_configuration
+        if rag_configuration is None:
+            raise Exception("No RAG configuration provided - configure it with MilleGrilles AiChat")
+
+        query_model = rag_configuration['model_query_name']
+        embedding_model = rag_configuration['model_embedding_name']
+        context_len = rag_configuration.get('context_len')
+        doc_chunk_len = rag_configuration.get('document_chunk_len')
+
+        instance = self.__context.pick_ollama_instance(query_model)
+        async with instance.semaphore:
+            vector_store = await asyncio.to_thread(self.open_vector_store, Constantes.DOMAINE_GROS_FICHIERS, user_id, instance, embedding_model)
+            retriever = vector_store.as_retriever()
+
+            client = instance.get_async_client(self.__context.configuration)
+            # Calculate doc limit using ~2 * context chars
+            limit = math.floor(context_len * 2.5 / doc_chunk_len)
             prompt, doc_ref = await format_prompt(retriever, query, limit)
-            self.__logger.debug(f"PROMPT (len:{len(prompt)})\n{prompt}")
+            self.__logger.debug(f"PROMPT (limit: {limit}, len:{len(prompt)})\n{prompt}")
             response = await client.generate(
-                model="llama3.2:3b-instruct-q8_0",
+                model=query_model,
                 prompt=prompt,
-                options={"temperature": 0.0, "num_ctx": CONTEXT_LEN}
+                options={"temperature": 0.0, "num_ctx": context_len}
             )
 
         self.__logger.debug("Response: %s" % response['response'])
@@ -222,8 +233,14 @@ class DocumentIndexHandler:
             tmp_file = job.get('tmp_file')
             if tmp_file:
                 try:
-                    vector_store = await asyncio.to_thread(self.open_vector_store, domain, user_id)
-                    async with self.__context.ollama_http_semaphore:
+                    rag_configuration = self.__context.rag_configuration
+                    if rag_configuration is None:
+                        raise Exception("No RAG configuration provided - configure it with MilleGrilles AiChat")
+
+                    embedding_model = rag_configuration['model_embedding_name']
+                    instance = self.__context.pick_ollama_instance(embedding_model)
+                    async with instance.semaphore:
+                        vector_store = await asyncio.to_thread(self.open_vector_store, domain, user_id, instance, embedding_model)
                         await asyncio.to_thread(index_pdf_file, vector_store, tuuid, filename, tmp_file)
                 except (ValueError, PdfStreamError):
                     self.__logger.exception(f"Error processing file tuuid {tuuid}), rejecting")
@@ -289,7 +306,7 @@ class DocumentIndexHandler:
 
         pass
 
-    def open_vector_store(self, domain: str, user_id: str) -> VectorStore:
+    def open_vector_store(self, domain: str, user_id: str, instance: OllamaInstance, embedding_model: str) -> VectorStore:
         # Collection name must be between 3 and 63 chars, truncate the user_id to the last 32 chars
         user_id_trunc = user_id[-32:]
         collection_name = f'{domain}_{user_id_trunc}'
@@ -298,18 +315,19 @@ class DocumentIndexHandler:
         if vector_store:
             return vector_store
 
-        options = self.__context.get_client_options()
+        configuration = self.__context.configuration
+        options = instance.get_client_options(configuration)
         base_url = options['host']
         del options['host']
+
         embeddings = OllamaEmbeddings(
-            model=EMBEDDING_MODEL,
+            model=embedding_model,
             base_url=base_url,
             # model="llama3.2:3b-instruct-q8_0",
             # num_gpu=0,  # Disable GPU to avoid swapping models on ollama
             client_kwargs=options,
         )
 
-        configuration = self.__context.configuration
         path_db = pathlib.Path(configuration.dir_rag, "chroma_langchain_db")
         path_db.mkdir(exist_ok=True)
 
@@ -324,11 +342,11 @@ class DocumentIndexHandler:
         return vector_store
 
 
-def index_pdf_file(vector_store: VectorStore, tuuid: str, filename: str, tmp_file: tempfile.NamedTemporaryFile):
+def index_pdf_file(vector_store: VectorStore, tuuid: str, filename: str, tmp_file: tempfile.NamedTemporaryFile, doc_len=1000, overlap=50):
     loader = PyPDFLoader(tmp_file.name, mode="single")
     document_list = loader.load()
     document = document_list[0]
-    splitter = RecursiveCharacterTextSplitter(chunk_size=DOC_LEN, chunk_overlap=DOC_OVERLAP)
+    splitter = RecursiveCharacterTextSplitter(chunk_size=doc_len, chunk_overlap=overlap)
     chunks = splitter.split_documents([document])
     chunk_no = 1
     for chunk in chunks:
