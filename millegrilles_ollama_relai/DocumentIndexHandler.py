@@ -1,4 +1,5 @@
 import asyncio
+import datetime
 import logging
 import pathlib
 import tempfile
@@ -367,6 +368,8 @@ async def format_prompt(retriever: RetrieverLike, query: str, limit: int) -> (st
     # Wrap the documents in <source /> tags with id
     context_tags = [f'<source id="{elem.id}">{elem.page_content}</source>' for elem in context_response]
 
+    now = datetime.datetime.now()
+
     # Prompt source - open-webui (https://openwebui.com/)
     prompt = f"""
 ### Task:
@@ -382,6 +385,7 @@ Respond to the user query using the provided context, incorporating inline citat
 - Do not cite if the <source> tag does not contain an id attribute.
 - Do not use XML tags in your response.
 - Ensure citations are concise and directly related to the information provided.
+- The current date and time is {now}, use this as now when appropriate.
 
 ### Example of Citation:
 If the user asks about a specific topic and the information is found in a source with a provided id attribute, the response should include the citation like in the following example:
