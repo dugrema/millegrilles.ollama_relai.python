@@ -104,11 +104,13 @@ class DocumentIndexHandler:
             client = instance.get_async_client(self.__context.configuration)
             # Calculate doc limit using ~2 * context chars
             limit = math.floor(context_len * 2.5 / doc_chunk_len)
-            prompt, doc_ref = await format_prompt(retriever, query, limit)
-            self.__logger.debug(f"PROMPT (limit: {limit}, len:{len(prompt)})\n{prompt}")
+            system_prompt, command_prompt, doc_ref = await format_prompt(retriever, query, limit)
+            self.__logger.debug(f"PROMPT (limit: {limit}, len:{len(system_prompt) + len(command_prompt)})\n{command_prompt}")
             response = await client.generate(
                 model=query_model,
-                prompt=prompt,
+                # prompt=system_prompt + "\n" + command_prompt,
+                prompt=command_prompt,
+                system=system_prompt,
                 options={"temperature": 0.0, "num_ctx": context_len}
             )
 
@@ -358,7 +360,7 @@ def index_pdf_file(vector_store: VectorStore, tuuid: str, filename: str, tmp_fil
     vector_store.add_documents(list(chunks))
 
 
-async def format_prompt(retriever: RetrieverLike, query: str, limit: int) -> (str, list[dict]):
+async def format_prompt(retriever: RetrieverLike, query: str, limit: int) -> (str, str, list[dict]):
     context_response = await retriever.ainvoke(query, k=limit)
 
     doc_ref = list()
@@ -371,9 +373,9 @@ async def format_prompt(retriever: RetrieverLike, query: str, limit: int) -> (st
     now = datetime.datetime.now()
 
     # Prompt source - open-webui (https://openwebui.com/)
-    prompt = f"""
+    system_prompt = f"""
 ### Task:
-Respond to the user query using the provided context, incorporating inline citations in the format [id] **only when the <source> tag includes an explicit id attribute** (e.g., <source id="1">).
+Respond to the user query using the provided context, incorporating inline citations in the format [id] **only when the <source> tag includes an explicit id attribute** (e.g., <source id="abcd-1234/1">).
 
 ### Guidelines:
 - If you don't know the answer, clearly state that.
@@ -385,7 +387,6 @@ Respond to the user query using the provided context, incorporating inline citat
 - Do not cite if the <source> tag does not contain an id attribute.
 - Do not use XML tags in your response.
 - Ensure citations are concise and directly related to the information provided.
-- The current date and time is {now}, use this as now when appropriate.
 
 ### Example of Citation:
 If the user asks about a specific topic and the information is found in a source with a provided id attribute, the response should include the citation like in the following example:
@@ -393,6 +394,11 @@ If the user asks about a specific topic and the information is found in a source
 
 ### Output:
 Provide a clear and direct response to the user's query, including inline citations in the format [id] only when the <source> tag with id attribute is present in the context.
+    """
+
+    command_prompt = f"""
+### Variable reference:
+- The current date and time is {now}, use this as now when appropriate.
 
 <context>
 {"\n".join(context_tags)}
@@ -403,4 +409,4 @@ Provide a clear and direct response to the user's query, including inline citati
 </user_query>    
     """
 
-    return prompt, doc_ref
+    return system_prompt, command_prompt, doc_ref
