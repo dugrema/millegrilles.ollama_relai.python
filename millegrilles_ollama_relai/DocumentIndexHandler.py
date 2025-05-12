@@ -96,7 +96,11 @@ class DocumentIndexHandler:
         context_len = rag_configuration.get('context_len')
         doc_chunk_len = rag_configuration.get('document_chunk_len')
 
-        instance = self.__context.pick_ollama_instance(query_model)
+        try:
+            instance = self.__context.pick_ollama_instance(query_model)
+        except IndexError:
+            return {'ok': False, 'err': 'No ollama instance available'}
+
         async with instance.semaphore:
             vector_store = await asyncio.to_thread(self.open_vector_store, Constantes.DOMAINE_GROS_FICHIERS, user_id, instance, embedding_model)
             retriever = vector_store.as_retriever()
@@ -368,7 +372,18 @@ async def format_prompt(retriever: RetrieverLike, query: str, limit: int) -> (st
         doc_ref.append({"id": elem.id, "page_content": elem.page_content, "metadata": dict(elem.metadata)})
 
     # Wrap the documents in <source /> tags with id
-    context_tags = [f'<source id="{elem.id}">{elem.page_content}</source>' for elem in context_response]
+    context_tags: list[str] = list()
+    for elem in context_response:
+        tag = f'<source id="{elem.id}"'
+        try:
+            source: str = elem.metadata['source']
+            source = source.replace("\"", "'")  # Replace all double-quotes by single quotes
+            tag += f' src="{source}"'
+        except KeyError:
+            pass
+        tag += f'>{elem.page_content}</source>'
+        # context_tags = [f'<source id="{elem.id}">{elem.page_content}</source>' for elem in context_response]
+        context_tags.append(tag)
 
     now = datetime.datetime.now()
 
@@ -387,6 +402,7 @@ Respond to the user query using the provided context, incorporating inline citat
 - Do not cite if the <source> tag does not contain an id attribute.
 - Do not use XML tags in your response.
 - Ensure citations are concise and directly related to the information provided.
+- The current date and time is {now}, use this as now when appropriate.
 
 ### Example of Citation:
 If the user asks about a specific topic and the information is found in a source with a provided id attribute, the response should include the citation like in the following example:
@@ -397,9 +413,6 @@ Provide a clear and direct response to the user's query, including inline citati
     """
 
     command_prompt = f"""
-### Variable reference:
-- The current date and time is {now}, use this as now when appropriate.
-
 <context>
 {"\n".join(context_tags)}
 </context>

@@ -29,6 +29,9 @@ class OllamaManager:
 
         self.__filehost_listeners: list[Callable[[Optional[Filehost]], Awaitable[None]]] = list()
 
+        self.__load_ai_configuration_event = asyncio.Event()
+        self.__load_filehost_event = asyncio.Event()
+
     @property
     def context(self):
         return self.__context
@@ -40,6 +43,12 @@ class OllamaManager:
         dir_rag = pathlib.Path(configuration.dir_rag)
         dir_rag.mkdir(parents=True, exist_ok=True)
 
+    async def __stop_thread(self):
+        await self.__context.wait()
+        # Free threads
+        self.__load_ai_configuration_event.set()
+        self.__load_filehost_event.set()
+
     async def run(self):
         self.__logger.debug("OllamaManager Starting")
         async with TaskGroup() as group:
@@ -47,6 +56,7 @@ class OllamaManager:
             group.create_task(self.__staging_cleanup())
             group.create_task(self.__reload_ai_configuration_thread())
             group.create_task(self.__ollama_watchdog_thread())
+            group.create_task(self.__stop_thread())
         self.__logger.debug("OllamaManager Done")
 
     def add_filehost_listener(self, listener: Callable[[Optional[Filehost]], Awaitable[None]]):
@@ -55,11 +65,15 @@ class OllamaManager:
     async def __reload_filehost_thread(self):
         while self.__context.stopping is False:
             try:
+                self.__load_filehost_event.clear()
                 await self.reload_filehost_configuration()
-                await self.__context.wait(900)
+                try:
+                    await asyncio.wait_for(self.__load_filehost_event.wait(), 900)
+                except asyncio.TimeoutError:
+                    pass  # Loop
             except:
                 self.__logger.exception("Error loading filehost configuration")
-                await self.__context.wait(30)
+                await self.__context.wait(15)
 
     async def reload_filehost_configuration(self):
         producer = await self.__context.get_producer()
@@ -84,15 +98,22 @@ class OllamaManager:
 
             await self.__context.wait(300)
 
+    async def trigger_reload_ai_configuration(self):
+        self.__logger.info("Reloading AI Configuration on event")
+        self.__load_ai_configuration_event.set()
+
     async def __reload_ai_configuration_thread(self):
         while self.__context.stopping is False:
             try:
+                self.__load_ai_configuration_event.clear()
                 await self.__reload_ai_configuration()
-                await self.__context.wait(300)
+                try:
+                    await asyncio.wait_for(self.__load_ai_configuration_event.wait(), 300)
+                except asyncio.TimeoutError:
+                    pass  # Loop
             except:
                 self.__logger.exception("Error loading ai configuration")
-                await self.__context.wait(30)
-
+                await self.__context.wait(20)
 
     async def handle_volalile_request(self, message: MessageWrapper):
         return await self.__query_handler.handle_requests(message)

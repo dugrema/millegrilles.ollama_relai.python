@@ -1,11 +1,5 @@
 import logging
-import httpx
 
-from asyncio import TaskGroup
-from ollama import AsyncClient
-from typing import Union, Mapping, Any, Optional
-
-from millegrilles_messages.messages import Constantes as ConstantesMilleGrilles
 from millegrilles_messages.messages.MessagesModule import MessageWrapper
 from millegrilles_ollama_relai.DocumentIndexHandler import DocumentIndexHandler
 from millegrilles_ollama_relai.OllamaChatHandler import OllamaChatHandler
@@ -20,16 +14,8 @@ class MessageHandler:
         self.__chat_handler = chat_handler
         self.__document_handler = document_handler
 
-        # self.__ollama_status: Union[bool, dict] = False
-        # self.__ollama_models: Optional[Mapping[str, Any]] = None
-
-    # def get_async_client(self) -> AsyncClient:
-    #     return self.__context.get_async_client()
-
     async def run(self):
         await self.__context.wait()
-        # async with TaskGroup() as group:
-        #     group.create_task(self.ollama_watchdog_thread())
 
     async def handle_requests(self, message: MessageWrapper):
         # Wait for the producer to be ready
@@ -76,36 +62,3 @@ class MessageHandler:
             return False  # We'll stream the messages, no automatic response here
 
         return {'ok': False, 'code': 404, 'err': 'Unknown action'}
-
-    # async def check_ollama_status(self):
-    #     client = self.__context.get_async_client()
-    #     try:
-    #         # Test connection by getting currently loaded model information
-    #         async with self.__context.ollama_http_semaphore:
-    #             self.__ollama_status = await client.ps()
-    #             self.__ollama_models = await client.list()
-    #         # return dict(status), models
-    #     except (httpx.ConnectError, ConnectionError):
-    #     # except httpx.ConnectError:
-    #         # Failed to connect
-    #         self.__ollama_status = False
-    #
-    # async def check_ollama_list_models(self) -> Union[bool, list]:
-    #     # client = self.__context.get_async_client()
-    #     try:
-    #         # Test connection by getting currently loaded model information
-    #         # async with self.__context.ollama_http_semaphore:
-    #         #     models = await client.list()
-    #         models = self.__ollama_models
-    #         model_list = list()
-    #         for model in models['models']:
-    #             name = model.model
-    #             model_list.append({'name': name})
-    #         return model_list
-    #     except httpx.ConnectError:
-    #         # Failed to connect
-    #         return False
-    #
-    # async def ollama_ping(self) -> (bool, str):
-    #     available = self.__ollama_status is not False
-    #     return available, ''

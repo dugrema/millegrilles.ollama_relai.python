@@ -64,14 +64,21 @@ class MgbusHandler:
             roles = enveloppe.get_roles
         except ExtensionNotFound:
             roles = list()
+        try:
+            domains_env = enveloppe.get_domaines
+        except ExtensionNotFound:
+            domains_env = None
 
         message_type = message.routing_key.split('.')[0]
         domain = message.routage['domaine']
         action = message.routage['action']
 
         if message_type == 'evenement':
-            if domain == 'filecontroler' and action == 'filehostNewFuuid':
+            if domain == 'filecontroler' and action == 'filehostNewFuuid' and 'filecontroler' in roles:
                 await self.__manager.trigger_rag_indexing()
+                return None
+            elif domain == 'AiLanguage' and action == 'configurationUpdated' and 'AiLanguage' in domains_env:
+                await self.__manager.trigger_reload_ai_configuration()
                 return None
 
         if Constantes.ROLE_USAGER not in roles:
@@ -100,8 +107,6 @@ class MgbusHandler:
 
         if action == 'chat':
             return await self.__manager.process_chat(message)
-        #if action in ['generate', 'chat']:
-        #    return await self.__manager.process_query(message)
 
         self.__logger.info("__on_processing_message Ignoring unknown action %s", message.routing_key)
         return {'ok': False, 'code': 404, 'err': 'Unknown operation'}
@@ -132,7 +137,8 @@ def create_volatile_q_channel(context: MilleGrillesBusContext,
             Constantes.SECURITE_PRIVE, f'requete.{OllamaConstants.DOMAIN_OLLAMA_RELAI}.queryRag'))
         q_instance.add_routing_key(RoutingKey(
             Constantes.SECURITE_PUBLIC, 'evenement.filecontroler.filehostNewFuuid'))
-
+        q_instance.add_routing_key(RoutingKey(
+            Constantes.SECURITE_PRIVE, 'evenement.AiLanguage.configurationUpdated'))
 
     q_channel.add_queue(q_instance)
     return q_channel
