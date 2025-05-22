@@ -249,8 +249,8 @@ class DocumentIndexHandler:
                     async with instance.semaphore:
                         vector_store = await asyncio.to_thread(self.open_vector_store, domain, user_id, instance, embedding_model)
                         await asyncio.to_thread(index_pdf_file, vector_store, tuuid, filename, tmp_file)
-                except (ValueError, PdfStreamError):
-                    self.__logger.exception(f"Error processing file tuuid {tuuid}), rejecting")
+                except (TypeError, ValueError, PdfStreamError) as e:
+                    self.__logger.exception(f"Error processing file tuuid {tuuid}), rejecting: %s" % str(e))
                     pass  # The file will be marked as processed later on
                 except:
                     self.__logger.exception(f"Error processing file tuuid {tuuid}, will retry")
