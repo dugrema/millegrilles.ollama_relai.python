@@ -189,6 +189,8 @@ class OllamaManager:
                     status = True
             except (httpx.ConnectError, ConnectionError):
                 # Failed to connect
+                if self.__logger.isEnabledFor(logging.DEBUG):
+                    self.__logger.exception(f"Connection error on {instance.url}")
                 instance.status = None  # Reset status, avoids picking this instance up
 
             # Indicates at least one instance is responsive
