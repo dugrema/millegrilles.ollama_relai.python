@@ -187,10 +187,13 @@ class OllamaManager:
                     instance_models = [m.model for m in instance.ollama_models.models]
                     models.update(instance_models)
                     status = True
-            except (httpx.ConnectError, ConnectionError):
+                    self.__logger.debug(f"Connection OK: {instance.url}")
+            except (httpx.ConnectError, ConnectionError) as e:
                 # Failed to connect
                 if self.__logger.isEnabledFor(logging.DEBUG):
                     self.__logger.exception(f"Connection error on {instance.url}")
+                else:
+                   self.__logger.info(f"Connection error on {instance.url}: %s" % str(e))
                 instance.status = None  # Reset status, avoids picking this instance up
 
             # Indicates at least one instance is responsive
