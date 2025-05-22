@@ -176,11 +176,12 @@ class OllamaManager:
 
         models = set()
         for instance in instances:
+            self.__logger.debug(f"Checking with {instance.url}")
             client = instance.get_async_client(self.context.configuration)
             status = False
             try:
                 # Test connection by getting currently loaded model information
-                async with self.__context.ollama_http_semaphore:
+                async with instance.semaphore:
                     instance.ollama_status = await client.ps()
                     instance.ollama_models = await client.list()
                     instance_models = [m.model for m in instance.ollama_models.models]

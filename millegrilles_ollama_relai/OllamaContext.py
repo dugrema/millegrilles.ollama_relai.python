@@ -67,7 +67,7 @@ class OllamaContext(MilleGrillesBusContext):
         self.ollama_status: bool = False
         self.ollama_models: Optional[list[Any]] = None
 
-        self.__ollama_http_semaphore = asyncio.BoundedSemaphore(1)
+        # self.__ollama_http_semaphore = asyncio.BoundedSemaphore(1)
         self.ai_configuration_loaded = asyncio.Event()
         self.rag_configuration: Optional[RagConfiguration] = None
 
@@ -87,9 +87,9 @@ class OllamaContext(MilleGrillesBusContext):
     async def get_producer(self):
         return await self.__bus_connector.get_producer()
 
-    @property
-    def ollama_http_semaphore(self) -> asyncio.BoundedSemaphore:
-        return self.__ollama_http_semaphore
+    # @property
+    # def ollama_http_semaphore(self) -> asyncio.BoundedSemaphore:
+    #     return self.__ollama_http_semaphore
 
     @property
     def filehost(self) -> Optional[Filehost]:
@@ -187,14 +187,18 @@ class OllamaContext(MilleGrillesBusContext):
         for instance in self.__instances:
             try:
                 url_set.remove(instance.url)
+                self.__logger.debug(f"URL {instance.url} kept")
             except KeyError:
                 # This instance has been removed
                 to_remove.add(instance.url)
+                self.__logger.debug(f"URL {instance.url} removed")
 
         # Remove instances that are no longer required
         updated_list = [i for i in self.__instances if i.url not in to_remove]
+
         # Add missing instances
         for url in url_set:
             updated_list.append(OllamaInstance(url))
+            self.__logger.debug(f"URL {url} added")
 
         self.__instances = updated_list
