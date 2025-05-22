@@ -2,19 +2,10 @@ FROM docker.maple.maceroc.com:5000/millegrilles_messages_python:2024.9.91 as sta
 
 ARG VBUILD=2025.3.0
 
-ENV CERT_PATH=/run/secrets/cert.pem \
-    KEY_PATH=/run/secrets/key.pem \
-    CA_PATH=/run/secrets/pki.millegrille.cert \
-    MQ_HOSTNAME=mq \
-    MQ_PORT=5673 \
-    REDIS_HOSTNAME=redis \
-    REDIS_PASSWORD_PATH=/var/run/secrets/passwd.redis.txt \
-    WEB_PORT=1443
-
 # Install dependencies
-RUN apt update && \
-    apt install -y poppler-utils && \
-    apt clean
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends poppler-utils && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Stage 2
 FROM stage1 as stage2
@@ -32,8 +23,17 @@ RUN pip3 install --no-cache-dir -r $BUILD_FOLDER/requirements.txt
 # Final stage
 FROM stage2
 
+ENV CERT_PATH=/run/secrets/cert.pem \
+    KEY_PATH=/run/secrets/key.pem \
+    CA_PATH=/run/secrets/pki.millegrille.cert \
+    MQ_HOSTNAME=mq \
+    MQ_PORT=5673 \
+    REDIS_HOSTNAME=redis \
+    REDIS_PASSWORD_PATH=/var/run/secrets/passwd.redis.txt \
+    WEB_PORT=1443 \
+    OLLAMA_URL=http://ollama:11434
+
 EXPOSE 80 443
-ENV OLLAMA_URL=http://ollama:11434
 
 COPY . $BUILD_FOLDER
 
