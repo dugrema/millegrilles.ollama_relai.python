@@ -66,6 +66,7 @@ class OllamaContext(MilleGrillesBusContext):
         self.__instances: list[OllamaInstance] = list()
         self.ollama_status: bool = False
         self.ollama_models: Optional[list[Any]] = None
+        self.ollama_model_params: dict[str, dict] = dict()
 
         # self.__ollama_http_semaphore = asyncio.BoundedSemaphore(1)
         self.ai_configuration_loaded = asyncio.Event()

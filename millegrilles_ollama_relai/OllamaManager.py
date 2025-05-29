@@ -14,16 +14,18 @@ from millegrilles_ollama_relai.DocumentIndexHandler import DocumentIndexHandler
 from millegrilles_ollama_relai.OllamaChatHandler import OllamaChatHandler
 from millegrilles_ollama_relai.OllamaContext import OllamaContext, RagConfiguration
 from millegrilles_ollama_relai.MessageHandler import MessageHandler
+from millegrilles_ollama_relai.OllamaTools import OllamaToolHandler
 
 
 class OllamaManager:
 
     def __init__(self, context: OllamaContext, query_handler: MessageHandler, attachment_handler: AttachmentHandler,
-                 chat_handler: OllamaChatHandler, document_handler: DocumentIndexHandler):
+                 tool_handler: OllamaToolHandler, chat_handler: OllamaChatHandler, document_handler: DocumentIndexHandler):
         self.__logger = logging.getLogger(__name__+'.'+self.__class__.__name__)
         self.__context = context
         self.__query_handler = query_handler
         self.__attachment_handler = attachment_handler
+        self.__tool_handler = tool_handler
         self.__chat_handler = chat_handler
         self.__document_handler = document_handler
 
@@ -184,6 +186,15 @@ class OllamaManager:
                 async with instance.semaphore:
                     instance.ollama_status = await client.ps()
                     instance.ollama_models = await client.list()
+                    for model in instance.ollama_models.models:
+                        try:
+                            self.context.ollama_model_params[model.model]
+                        except KeyError:
+                            params = dict()
+                            model_info = await client.show(model.model)
+                            params['capabilities'] = model_info.capabilities
+                            self.context.ollama_model_params[model.model] = params
+
                     instance_models = [m.model for m in instance.ollama_models.models]
                     models.update(instance_models)
                     status = True
@@ -198,4 +209,15 @@ class OllamaManager:
 
             # Indicates at least one instance is responsive
             self.__context.ollama_status = status
-            self.__context.ollama_models = [{'name': m} for m in models]
+            ollama_models = list()
+            for m in models:
+                model_info = {'name': m}
+                try:
+                    params = self.__context.ollama_model_params[m]
+                    model_info.update(params)
+                except KeyError:
+                    pass
+                ollama_models.append(model_info)
+
+            # self.__context.ollama_models = [{'name': m} for m in models]
+            self.__context.ollama_models = ollama_models

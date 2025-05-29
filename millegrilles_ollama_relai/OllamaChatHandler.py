@@ -10,6 +10,9 @@ import os
 
 from typing import Optional
 
+import ollama
+from aiohttp import ClientResponseError
+
 from millegrilles_messages.messages import Constantes as ConstantesMilleGrilles
 from millegrilles_messages.messages.MessagesModule import MessageWrapper
 from millegrilles_ollama_relai.AttachmentHandler import AttachmentHandler
@@ -17,14 +20,16 @@ from millegrilles_ollama_relai.OllamaContext import OllamaContext
 from millegrilles_messages.chiffrage.Mgs4 import chiffrer_mgs4_bytes_secrete
 from millegrilles_messages.chiffrage.SignatureDomaines import SignatureDomaines
 from millegrilles_messages.chiffrage.DechiffrageUtils import dechiffrer_bytes_secrete, dechiffrer_document_secrete
+from millegrilles_ollama_relai.OllamaTools import OllamaToolHandler
 
 
 class OllamaChatHandler:
 
-    def __init__(self, context: OllamaContext, attachment_handler: AttachmentHandler):
+    def __init__(self, context: OllamaContext, attachment_handler: AttachmentHandler, tool_handler: OllamaToolHandler):
         self.__logger = logging.getLogger(__name__ + '.' + self.__class__.__name__)
         self.__context = context
         self.__attachment_handler = attachment_handler
+        self.__tool_handler = tool_handler
         self.__waiting_ids: dict[str, dict] = dict()  # Key = chat_id, value = {reply_to, correlation_id}
 
     async def run(self):
@@ -277,15 +282,52 @@ class OllamaChatHandler:
     async def ollama_chat(self, messages: list[dict], model: str, done: asyncio.Event):
         instance = self.__context.pick_ollama_instance(model)
         client = instance.get_async_client(self.__context.configuration)
+
+        # Check if the model supports tools
+        try:
+            model_info = [m for m in self.__context.ollama_models if m['name'] == model][0]
+            if 'tools' in model_info['capabilities']:
+                tools = self.__tool_handler.tools()
+            else:
+                tools = None
+        except (TypeError, AttributeError, IndexError, KeyError):
+            tools = None
+
         async with instance.semaphore:
             stream = await client.chat(
                 model=model,
                 messages=messages,
+                tools=tools,
                 stream=True,
             )
 
+            tool_calls = None
+
             async for part in stream:
-                yield part
+                if part.message.tool_calls:
+                    tool_calls = part.message.tool_calls
+
+                if tool_calls:
+                    pass
+                else:
+                    yield part
+
+            if tool_calls:
+                # Tool mode, run tools then feed result back to model
+                messages.append(part.message)
+                for tool_call in tool_calls:
+                    output = await self.__tool_handler.run_tool(tool_call)
+                    messages.append({'role': 'tool', 'content': str(output), 'name': tool_call.function.name})
+
+                stream = await client.chat(
+                    model=model,
+                    messages=messages,
+                    tools=tools,
+                    stream=True,
+                )
+
+                async for part in stream:
+                    yield part
 
     async def emit_event_thread(self, correlations: dict[str, dict], event_name: str):
         # Wait for the initialization of the producer

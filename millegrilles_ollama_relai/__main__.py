@@ -15,6 +15,7 @@ from millegrilles_ollama_relai.OllamaConfiguration import OllamaConfiguration
 from millegrilles_ollama_relai.OllamaContext import OllamaContext
 from millegrilles_ollama_relai.OllamaManager import OllamaManager
 from millegrilles_ollama_relai.MessageHandler import MessageHandler
+from millegrilles_ollama_relai.OllamaTools import OllamaToolHandler
 
 LOGGER = logging.getLogger(__name__)
 
@@ -59,12 +60,13 @@ async def wiring(context: OllamaContext) -> list[Awaitable]:
     bus_connector = MilleGrillesPikaConnector(context)
     context.bus_connector = bus_connector
     attachment_handler = AttachmentHandler(context)
-    chat_handler = OllamaChatHandler(context, attachment_handler)
+    tool_handler = OllamaToolHandler(context, attachment_handler)
+    chat_handler = OllamaChatHandler(context, attachment_handler, tool_handler)
     document_handler = DocumentIndexHandler(context, attachment_handler)
     query_handler = MessageHandler(context, chat_handler, document_handler)
 
     # Facade
-    manager = OllamaManager(context, query_handler, attachment_handler, chat_handler, document_handler)
+    manager = OllamaManager(context, query_handler, attachment_handler, tool_handler, chat_handler, document_handler)
 
     # Access modules
     bus_handler = MgbusHandler(manager)
@@ -72,6 +74,7 @@ async def wiring(context: OllamaContext) -> list[Awaitable]:
     # Setup, injecting additional dependencies
     await manager.setup()  # Create folders for other modules
     await document_handler.setup()  # Connect to local vector DB
+    await tool_handler.setup()
 
     # Create tasks
     coros = [
@@ -79,6 +82,7 @@ async def wiring(context: OllamaContext) -> list[Awaitable]:
         query_handler.run(),
         manager.run(),
         bus_handler.run(),
+        tool_handler.run(),
         chat_handler.run(),
         document_handler.run(),
     ]
