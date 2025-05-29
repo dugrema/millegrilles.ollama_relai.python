@@ -348,10 +348,13 @@ class OllamaChatHandler:
 
             tool_calls = None
 
+            cumulative_output = ''
+
             async for part in stream:
                 if part.message.tool_calls:
                     tool_calls = part.message.tool_calls
 
+                cumulative_output += part.message.content
                 if tool_calls:
                     pass
                 else:
@@ -362,6 +365,9 @@ class OllamaChatHandler:
                 messages.append(part.message)
                 for tool_call in tool_calls:
                     output = await self.__tool_handler.run_tool(tool_call)
+                    if len(cumulative_output) > 0:
+                        messages.append({'role': 'assistant', 'content': cumulative_output})
+                        cumulative_output = ''
                     messages.append({'role': 'tool', 'content': str(output), 'name': tool_call.function.name})
 
                 stream = await client.chat(
