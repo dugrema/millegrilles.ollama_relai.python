@@ -57,6 +57,9 @@ class MgbusHandler:
         channel_processing = create_processing_q_channel(context, self.__on_processing_message)
         await self.__manager.context.bus_connector.add_channel(channel_processing)
 
+        channel_triggers = create_trigger_q_channel(context, self.__on_processing_trigger)
+        await self.__manager.context.bus_connector.add_channel(channel_triggers)
+
     async def __on_volatile_message(self, message: MessageWrapper):
         # Authorization check
         enveloppe = message.certificat
@@ -85,7 +88,7 @@ class MgbusHandler:
             return {'ok': False, 'code': 403, 'err': 'Acces denied'}
 
         if action in ['chat']:
-            return await self.__manager.handle_volalile_query(message)
+            return await self.__manager.handle_volalile_commands(message)
         elif action in ['pull', 'ping', 'getModels', 'queryRag']:
             return await self.__manager.handle_volalile_request(message)
 
@@ -107,6 +110,25 @@ class MgbusHandler:
 
         if action == 'chat':
             return await self.__manager.process_chat(message)
+
+        self.__logger.info("__on_processing_message Ignoring unknown action %s", message.routing_key)
+        return {'ok': False, 'code': 404, 'err': 'Unknown operation'}
+
+    async def __on_processing_trigger(self, message: MessageWrapper):
+        # Authorization check
+        enveloppe = message.certificat
+        try:
+            roles = enveloppe.get_roles
+        except ExtensionNotFound:
+            roles = list()
+
+        if Constantes.ROLE_USAGER not in roles:
+            return {'ok': False, 'code': 403, 'err': 'Acces denied'}
+
+        action = message.routage['action']
+
+        if action == 'cancelChat':
+            return await self.__manager.cancel_chat(message)
 
         self.__logger.info("__on_processing_message Ignoring unknown action %s", message.routing_key)
         return {'ok': False, 'code': 404, 'err': 'Unknown operation'}
@@ -160,3 +182,14 @@ def create_processing_q_channel(context: MilleGrillesBusContext,
 
     q_channel.add_queue(q_instance)
     return q_channel
+
+
+def create_trigger_q_channel(context: MilleGrillesBusContext, on_message: Callable[[MessageWrapper], Coroutine[Any, Any, None]]) -> MilleGrillesPikaChannel:
+    # System triggers
+    trigger_q_channel = MilleGrillesPikaChannel(context, prefetch_count=1)
+    trigger_q = MilleGrillesPikaQueueConsumer(context, on_message, exclusive=True, arguments={'x-message-ttl': 30_000})
+    trigger_q_channel.add_queue(trigger_q)
+    # trigger_q.add_routing_key(RoutingKey(Constantes.SECURITE_PUBLIC, f'evenement.ceduleur.{Constantes.EVENEMENT_PING_CEDULE}'))
+    trigger_q.add_routing_key(RoutingKey(Constantes.SECURITE_PRIVE, f'commande.{OllamaConstants.DOMAIN_OLLAMA_RELAI}.cancelChat'))
+
+    return trigger_q_channel

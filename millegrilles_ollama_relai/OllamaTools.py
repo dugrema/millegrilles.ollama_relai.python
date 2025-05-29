@@ -1,7 +1,5 @@
 import logging
 
-from langchain_core.messages import ToolCall
-
 from millegrilles_ollama_relai.AttachmentHandler import AttachmentHandler
 from millegrilles_ollama_relai.OllamaContext import OllamaContext
 from millegrilles_ollama_relai.OllamaToolsTime import ToolTime

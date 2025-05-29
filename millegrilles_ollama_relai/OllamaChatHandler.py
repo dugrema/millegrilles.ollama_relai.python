@@ -8,17 +8,13 @@ import tempfile
 import subprocess
 import os
 
-from typing import Optional
-
-import ollama
-from aiohttp import ClientResponseError
+from typing import Any, Optional, Coroutine
 
 from millegrilles_messages.messages import Constantes as ConstantesMilleGrilles
 from millegrilles_messages.messages.MessagesModule import MessageWrapper
 from millegrilles_ollama_relai.AttachmentHandler import AttachmentHandler
 from millegrilles_ollama_relai.OllamaContext import OllamaContext
 from millegrilles_messages.chiffrage.Mgs4 import chiffrer_mgs4_bytes_secrete
-from millegrilles_messages.chiffrage.SignatureDomaines import SignatureDomaines
 from millegrilles_messages.chiffrage.DechiffrageUtils import dechiffrer_bytes_secrete, dechiffrer_document_secrete
 from millegrilles_ollama_relai.OllamaTools import OllamaToolHandler
 
@@ -31,10 +27,17 @@ class OllamaChatHandler:
         self.__attachment_handler = attachment_handler
         self.__tool_handler = tool_handler
         self.__waiting_ids: dict[str, dict] = dict()  # Key = chat_id, value = {reply_to, correlation_id}
+        self.__running_chats: dict[str, asyncio.Task] = dict()
+        self.__cancelled_chats = set()
 
     async def run(self):
         async with TaskGroup() as group:
             group.create_task(self.emit_event_thread(self.__waiting_ids, 'attente'))
+
+    async def __maintenance(self):
+        while self.__context.stopping is False:
+            self.__cancelled_chats.clear()  # Clear all cancelled chats (crude, may clear while chat is in queue)
+            await self.__context.wait(900)
 
     async def register_query(self, message: MessageWrapper):
         producer = await self.__context.get_producer()
@@ -59,8 +62,32 @@ class OllamaChatHandler:
 
         return False  # We'll stream the messages, no automatic response here
 
+    async def cancel_chat(self, message: MessageWrapper):
+        chat_id = message.parsed['chat_id']
+        self.__logger.info(f"Cancelling chat_id {chat_id}")
+        # The chat is not in the waiting queue, try to cancel its task
+        try:
+            self.__running_chats[chat_id].cancel()
+            return {'ok': True}  # Cancelled
+        except KeyError:
+            # No task running that corresponds to the chat_id
+            # Assume it is in the processing Q and any ollama_relai may pick it up
+            self.__cancelled_chats.add(chat_id)
+            try:
+                # Stop sending events on that chat if it is waiting
+                del self.__waiting_ids[chat_id]
+            except KeyError:
+                pass
+
+        return {'ok': True, 'message': 'Will be cancelled'}
+
     async def process_chat(self, message: MessageWrapper):
         chat_id = message.id
+        if chat_id in self.__cancelled_chats:
+            # Chat has been cancelled, skip it
+            self.__cancelled_chats.remove(chat_id)
+            return False
+
         # original_message: MessageWrapper = self.__waiting_ids[chat_id]['original']
 
         max_context_length = 512000  # Avoid sending huge documents
@@ -182,92 +209,26 @@ class OllamaChatHandler:
 
             # Run the query. Emit
             done_event = asyncio.Event()
-            # response_content = await self.query_ollama(action, content, done_event)
             if action == 'chat':
                 chat_stream = self.ollama_chat(chat_messages, chat_model, done_event)
-            # elif action == 'generate':
-            #     chat_messages = [{'role': 'user', 'content': content['prompt']}]
-            #     chat_stream = self.ollama_chat(chat_messages, chat_model, done_event)
             else:
                 raise Exception('action %s not supported' % action)
-            # response_content = {'message': {'role': 'dummy', 'content': 'NANANA2'}}
 
-            emit_interval = datetime.timedelta(milliseconds=750)
-            next_emit = datetime.datetime.now() + emit_interval
-            buffer = ''
-            complete_response = []
-            async for chunk in chat_stream:
-                chunk = dict(chunk)
-                chunk['message'] = dict(chunk['message'])
+            # Do another check in case the chat was cancelled.
+            if chat_id in self.__cancelled_chats:
+                # Chat has been cancelled, skip it
+                self.__cancelled_chats.remove(chat_id)
+                return False
 
-                try:
-                    # Stop emitting keep-alive messages
-                    del self.__waiting_ids[chat_id]
-                except KeyError:
-                    pass  # Ok, already removed or on another instance
+            # Create the stream task
+            stream_coro = self.stream_chat_response(
+                chat_id, decryption_key, conversation_id, cle_id, user_id, new_conversation,
+                attached_tuuids, original_message, dechiffrage, enveloppe, correlation_id, reply_to, chat_stream)
+            stream_task = asyncio.create_task(stream_coro)
+            # Save task to allow cancellation, then wait on completion
+            self.__running_chats[chat_id] = stream_task
+            await stream_task
 
-                attachments = None
-                done = True
-                try:
-                    if chunk['done'] is not True:
-                        attachments = {'streaming': True}
-                        done = False
-                except KeyError:
-                    pass
-
-                buffer += chunk['message']['content']
-
-                now = datetime.datetime.now()
-                if attachments is None or now > next_emit:
-                    chunk['message']['content'] = buffer
-                    complete_response.append(buffer)  # Keep for response transaction
-                    buffer = ''
-
-                    if done:
-                        # Join entire response in single string
-                        complete_response = ''.join(complete_response)
-                        domaine_signature_obj = SignatureDomaines.from_dict(domain_signature)
-                        # cle_id = domaine_signature_obj.get_cle_ref()
-
-                        # Encrypt
-                        cipher, encrypted_response = chiffrer_mgs4_bytes_secrete(decryption_key, complete_response)
-                        encrypted_response['cle_id'] = cle_id
-
-                        reply_command = {
-                            'conversation_id': conversation_id,
-                            'user_id': user_id,
-                            'encrypted_content': encrypted_response,
-                            'new': new_conversation,
-                            'model': chunk['model'],
-                            'role': 'assistant',
-                        }
-                        if attached_tuuids is not None:
-                            reply_command['tuuids'] = attached_tuuids
-                        del original_message['attachements']
-                        attachements_echange = {'query': original_message}
-                        attachements_echange.update(dechiffrage)
-
-                        signed_command, command_id = self.__context.formatteur.signer_message(
-                            ConstantesMilleGrilles.KIND_COMMANDE, reply_command, 'AiLanguage', action='chatExchange')
-                        chunk['message_id'] = command_id
-
-                        try:
-                            await producer.command(signed_command, 'AiLanguage', 'chatExchange',
-                                                   exchange=ConstantesMilleGrilles.SECURITE_PROTEGE,
-                                                   attachments=attachements_echange, noformat=True, timeout=2)
-
-                            chunk['chat_exchange_persisted'] = True
-                        except asyncio.TimeoutError:
-                            # Failure to save command, relay to user
-                            chunk['chat_exchange_persisted'] = False
-                            chunk['exchange_command'] = signed_command
-
-                    await producer.encrypt_reply([enveloppe], chunk, correlation_id=correlation_id, reply_to=reply_to,
-                                                 attachments=attachments)
-
-                    next_emit = now + emit_interval
-
-            return None
         except Exception as e:
             self.__logger.exception("Unhandled error during chat")
             await producer.reply({'ok': False, 'err': str(e)},
@@ -275,9 +236,93 @@ class OllamaChatHandler:
             raise e
         finally:
             try:
+                del self.__running_chats[chat_id]
+            except KeyError:
+                pass
+            try:
                 del self.__waiting_ids[chat_id]
             except KeyError:
                 pass  # Ok, could have been cancelled
+
+    async def stream_chat_response(self, chat_id: str, decryption_key, conversation_id, cle_id, user_id, new_conversation,
+                                   attached_tuuids, original_message, dechiffrage, enveloppe, correlation_id, reply_to, chat_stream):
+        producer = await self.__context.get_producer()
+        emit_interval = datetime.timedelta(milliseconds=750)
+        next_emit = datetime.datetime.now() + emit_interval
+        buffer = ''
+        complete_response = []
+        async for chunk in chat_stream:
+            chunk = dict(chunk)
+            chunk['message'] = dict(chunk['message'])
+
+            try:
+                # Stop emitting keep-alive messages
+                del self.__waiting_ids[chat_id]
+            except KeyError:
+                pass  # Ok, already removed or on another instance
+
+            attachments = None
+            done = True
+            try:
+                if chunk['done'] is not True:
+                    attachments = {'streaming': True}
+                    done = False
+            except KeyError:
+                pass
+
+            buffer += chunk['message']['content']
+
+            now = datetime.datetime.now()
+            if attachments is None or now > next_emit:
+                chunk['message']['content'] = buffer
+                complete_response.append(buffer)  # Keep for response transaction
+                buffer = ''
+
+                if done:
+                    # Join entire response in single string
+                    complete_response = ''.join(complete_response)
+                    # domaine_signature_obj = SignatureDomaines.from_dict(domain_signature)
+                    # cle_id = domaine_signature_obj.get_cle_ref()
+
+                    # Encrypt
+                    cipher, encrypted_response = chiffrer_mgs4_bytes_secrete(decryption_key, complete_response)
+                    encrypted_response['cle_id'] = cle_id
+
+                    reply_command = {
+                        'conversation_id': conversation_id,
+                        'user_id': user_id,
+                        'encrypted_content': encrypted_response,
+                        'new': new_conversation,
+                        'model': chunk['model'],
+                        'role': 'assistant',
+                    }
+                    if attached_tuuids is not None:
+                        reply_command['tuuids'] = attached_tuuids
+                    del original_message['attachements']
+                    attachements_echange = {'query': original_message}
+                    attachements_echange.update(dechiffrage)
+
+                    signed_command, command_id = self.__context.formatteur.signer_message(
+                        ConstantesMilleGrilles.KIND_COMMANDE, reply_command, 'AiLanguage', action='chatExchange')
+                    chunk['message_id'] = command_id
+
+                    try:
+                        await producer.command(signed_command, 'AiLanguage', 'chatExchange',
+                                               exchange=ConstantesMilleGrilles.SECURITE_PROTEGE,
+                                               attachments=attachements_echange, noformat=True, timeout=2)
+
+                        chunk['chat_exchange_persisted'] = True
+                    except asyncio.TimeoutError:
+                        # Failure to save command, relay to user
+                        chunk['chat_exchange_persisted'] = False
+                        chunk['exchange_command'] = signed_command
+
+                await producer.encrypt_reply([enveloppe], chunk, correlation_id=correlation_id, reply_to=reply_to,
+                                             attachments=attachments)
+
+                next_emit = now + emit_interval
+
+        return None
 
     async def ollama_chat(self, messages: list[dict], model: str, done: asyncio.Event):
         instance = self.__context.pick_ollama_instance(model)

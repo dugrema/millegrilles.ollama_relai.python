@@ -120,11 +120,18 @@ class OllamaManager:
     async def handle_volalile_request(self, message: MessageWrapper):
         return await self.__query_handler.handle_requests(message)
 
-    async def handle_volalile_query(self, message: MessageWrapper):
+    async def handle_volalile_commands(self, message: MessageWrapper):
         return await self.__query_handler.handle_commands(message)
 
     async def process_chat(self, message: MessageWrapper):
-        return await self.__chat_handler.process_chat(message)
+        try:
+            return await self.__chat_handler.process_chat(message)
+        except* asyncio.CancelledError:
+            pass
+        return {'ok': False, 'err': 'Cancelled'}
+
+    async def cancel_chat(self, message: MessageWrapper):
+        return await self.__chat_handler.cancel_chat(message)
 
     async def trigger_rag_indexing(self):
         await self.__document_handler.trigger_indexing()
