@@ -36,11 +36,11 @@ class ToolTime(OllamaTool):
 
 def _get_current_utc_date_and_time() -> str:
     now = datetime.now(tz=pytz.UTC).strftime("%a, %d %b %Y %H:%M:%S")
-    print(f"_get_current_utc_date_and_time: {now} UTC")
+    # print(f"_get_current_utc_date_and_time: {now} UTC")
     return f"The current date and time is: {now} UTC."
 
 def _get_current_user_date_and_time() -> str:
     now = datetime.now()
     local_timezone = datetime.now(timezone.utc).astimezone().tzinfo
-    print(f"_get_current_user_date_and_time: {now.strftime("%a, %d %b %Y %H:%M:%S")} {local_timezone}")
+    # print(f"_get_current_user_date_and_time: {now.strftime("%a, %d %b %Y %H:%M:%S")} {local_timezone}")
     return f"The user's current date and time is: {datetime.now().strftime("%a, %d %b %Y %H:%M:%S")} {local_timezone}"
