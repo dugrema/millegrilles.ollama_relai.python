@@ -42,6 +42,10 @@ class OllamaInstance:
         return AsyncClient(**options)
 
 
+class ChatConfiguration(TypedDict):
+    default_model: Optional[str]
+    chat_context_length: Optional[int]
+
 class RagConfiguration(TypedDict):
     model_embedding_name: Optional[str]
     model_query_name: Optional[str]
@@ -71,6 +75,7 @@ class OllamaContext(MilleGrillesBusContext):
         # self.__ollama_http_semaphore = asyncio.BoundedSemaphore(1)
         self.ai_configuration_loaded = asyncio.Event()
         self.rag_configuration: Optional[RagConfiguration] = None
+        self.chat_configuration: Optional[ChatConfiguration] = None
 
 
     @property

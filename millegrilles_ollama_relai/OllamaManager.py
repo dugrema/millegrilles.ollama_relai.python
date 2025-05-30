@@ -142,6 +142,13 @@ class OllamaManager:
         parsed = response.parsed
 
         try:
+            chat_configuration = parsed['default']
+        except (TypeError, KeyError):
+            self.__context.chat_configuration = None  # No information
+        else:
+            self.__context.chat_configuration = chat_configuration
+
+        try:
             urls = parsed['ollama_urls']['urls']
         except (TypeError, KeyError):
             pass  # No URL information

@@ -19,6 +19,8 @@ from millegrilles_messages.chiffrage.DechiffrageUtils import dechiffrer_bytes_se
 from millegrilles_ollama_relai.OllamaTools import OllamaToolHandler
 
 
+MAX_TOOL_ITERATIONS = 3
+
 class OllamaChatHandler:
 
     def __init__(self, context: OllamaContext, attachment_handler: AttachmentHandler, tool_handler: OllamaToolHandler):
@@ -327,6 +329,7 @@ class OllamaChatHandler:
     async def ollama_chat(self, messages: list[dict], model: str, done: asyncio.Event):
         instance = self.__context.pick_ollama_instance(model)
         client = instance.get_async_client(self.__context.configuration)
+        context_len = self.__context.chat_configuration.get('chat_context_length') or 4096
 
         # Check if the model supports tools
         try:
@@ -339,46 +342,56 @@ class OllamaChatHandler:
             tools = None
 
         async with instance.semaphore:
-            stream = await client.chat(
-                model=model,
-                messages=messages,
-                tools=tools,
-                stream=True,
-            )
+            # Loop to allow tool calls by the model.
+            for i in range(0, MAX_TOOL_ITERATIONS):
+                if i == MAX_TOOL_ITERATIONS - 1:
+                    # Last iteration. Prevent model from making any further calls to tools.
+                    self.__logger.warning(f"Stopping excessive tool usage by model {model}")
+                    tools = None
 
-            tool_calls = None
-
-            cumulative_output = ''
-
-            async for part in stream:
-                if part.message.tool_calls:
-                    tool_calls = part.message.tool_calls
-
-                cumulative_output += part.message.content
-                if tool_calls:
-                    pass
-                else:
-                    yield part
-
-            if tool_calls:
-                # Tool mode, run tools then feed result back to model
-                messages.append(part.message)
-                for tool_call in tool_calls:
-                    output = await self.__tool_handler.run_tool(tool_call)
-                    if len(cumulative_output) > 0:
-                        messages.append({'role': 'assistant', 'content': cumulative_output})
-                        cumulative_output = ''
-                    messages.append({'role': 'tool', 'content': str(output), 'name': tool_call.function.name})
-
+                # Chat request to ollama
                 stream = await client.chat(
                     model=model,
                     messages=messages,
                     tools=tools,
                     stream=True,
+                    options={"num_ctx": context_len}
                 )
 
+                # Keep the streaming output for tool calls
+                cumulative_output = ''
+                tools_called = False
+
                 async for part in stream:
-                    yield part
+                    if part.message.tool_calls:
+                        # Tools are being invoked. Keep history of output for assistant.
+                        if len(cumulative_output) > 0:
+                            messages.append({'role': 'assistant', 'content': cumulative_output})
+
+                        # Add message from assistant with calls to tools
+                        messages.append(part.message)
+
+                        # Reset output
+                        cumulative_output = ''
+
+                        if len(cumulative_output) > 0:
+                            messages.append({'role': 'assistant', 'content': cumulative_output})
+
+                        self.__logger.debug("Calling tools: %s" % part.message.tool_calls)
+                        for tool_call in part.message.tool_calls:
+                            output = await self.__tool_handler.run_tool(tool_call)
+                            messages.append({'role': 'tool', 'content': str(output), 'name': tool_call.function.name})
+                            tools_called = True
+
+                    cumulative_output += part.message.content
+                    if part.message.tool_calls or (part.done and tools_called):
+                        pass  # Avoid yielding part with tool calls, need to handle here first
+                    else:
+                        yield part
+
+                # If no tools were called, the chat is done. If we have tool responses, loop for a new iteration.
+                if tools_called is False:
+                    break  # Done
 
     async def emit_event_thread(self, correlations: dict[str, dict], event_name: str):
         # Wait for the initialization of the producer
