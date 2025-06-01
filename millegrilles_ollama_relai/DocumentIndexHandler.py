@@ -53,7 +53,7 @@ class DocumentIndexHandler:
         self.__semaphore_db = asyncio.BoundedSemaphore(1)
         self.__event_fetch_jobs = asyncio.Event()
 
-        self.__intake_queue: asyncio.Queue[Optional[FileInformation]] = asyncio.Queue(maxsize=2*QUERY_BATCH_RAG_LEN)
+        self.__intake_queue: asyncio.Queue[Optional[FileInformation]] = asyncio.Queue(maxsize=QUERY_BATCH_RAG_LEN)
         self.__indexing_queue: asyncio.Queue[Optional[FileInformation]] = asyncio.Queue(maxsize=2)
 
         self.__vector_store_cache: dict[str, VectorStore] = dict()
@@ -269,7 +269,22 @@ class DocumentIndexHandler:
 
     async def __query_batch_rag(self):
         producer = await self.__context.get_producer()
-        response = await producer.command({"batch_size": QUERY_BATCH_RAG_LEN}, Constantes.DOMAINE_GROS_FICHIERS, "leaseForRag", Constantes.SECURITE_PROTEGE)
+
+        # Calculate batch size from space left in processing queue
+        batch_size = self.__intake_queue.maxsize - self.__intake_queue.qsize()
+        if batch_size == 0:
+            return  # Nothing to do
+
+        try:
+            filehost_id = self.__context.filehost.filehost_id
+        except AttributeError:
+            # Filehost not loaded yet, wait and retry
+            await self.__context.wait(5)
+            filehost_id = self.__context.filehost.filehost_id
+
+        # Get the batch
+        command = {"batch_size": batch_size, "filehost_id": filehost_id}
+        response = await producer.command(command, Constantes.DOMAINE_GROS_FICHIERS, "leaseForRag", Constantes.SECURITE_PROTEGE)
         parsed = response.parsed
         if parsed['ok'] is not True:
             self.__logger.warning("Error retrieving batch of files for RAG: %s" % parsed)
