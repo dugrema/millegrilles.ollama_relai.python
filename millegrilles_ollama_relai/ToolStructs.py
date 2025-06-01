@@ -31,9 +31,11 @@ class OllamaTool:
 
         return self._tool_list_cache
 
-    async def run_tool(self, context: OllamaContext, function_name: str, args: Optional[dict: [str, Any]]):
+    async def run_tool(self, user_profile: dict, context: OllamaContext, function_name: str, args: Optional[dict: [str, Any]]):
         if args is None:
             args = dict()
+
+        args['user_profile'] = user_profile  # Inject user_profile in params
 
         try:
             tool = [t for t in self._tools if t['function']['name'] == function_name].pop()

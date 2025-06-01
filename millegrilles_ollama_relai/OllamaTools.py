@@ -26,7 +26,7 @@ class OllamaToolHandler:
             tools.extend(m.tools)
         return tools
 
-    async def run_tool(self, tool_call) -> str:
+    async def run_tool(self, user_profile: dict, tool_call) -> str:
         function_name = tool_call.function.name
         module_name = function_name.split('_')[0]
         try:
@@ -36,7 +36,7 @@ class OllamaToolHandler:
         else:
             arguments = tool_call.function.arguments
             try:
-                return await module_info.run_tool(self.__context, function_name, arguments)
+                return await module_info.run_tool(user_profile, self.__context, function_name, arguments)
             except Exception as e:
                 self.__logger.exception("Error running tool")
                 return f'Error during tool execution: {e}'

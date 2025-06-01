@@ -124,6 +124,7 @@ class OllamaChatHandler:
             chat_role = content['role']
             new_conversation = content.get('new') or False
             conversation_id = content['conversation_id']
+            user_profile = content.get('user_profile') or dict()
 
             # Recover the keys, send to MaitreDesCles to get the decrypted value
             dechiffrage = {'signature': domain_signature, 'cles': decryption_keys}
@@ -212,7 +213,7 @@ class OllamaChatHandler:
             # Run the query. Emit
             done_event = asyncio.Event()
             if action == 'chat':
-                chat_stream = self.ollama_chat(chat_messages, chat_model, done_event)
+                chat_stream = self.ollama_chat(user_profile, chat_messages, chat_model, done_event)
             else:
                 raise Exception('action %s not supported' % action)
 
@@ -326,7 +327,7 @@ class OllamaChatHandler:
 
         return None
 
-    async def ollama_chat(self, messages: list[dict], model: str, done: asyncio.Event):
+    async def ollama_chat(self, user_profile: dict, messages: list[dict], model: str, done: asyncio.Event):
         instance = self.__context.pick_ollama_instance(model)
         client = instance.get_async_client(self.__context.configuration)
         context_len = self.__context.chat_configuration.get('chat_context_length') or 4096
@@ -379,7 +380,7 @@ class OllamaChatHandler:
 
                         self.__logger.debug("Calling tools: %s" % part.message.tool_calls)
                         for tool_call in part.message.tool_calls:
-                            output = await self.__tool_handler.run_tool(tool_call)
+                            output = await self.__tool_handler.run_tool(user_profile, tool_call)
                             messages.append({'role': 'tool', 'content': str(output), 'name': tool_call.function.name})
                             tools_called = True
 
