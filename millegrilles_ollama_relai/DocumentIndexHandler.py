@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+import json
 import logging
 import pathlib
 import tempfile
@@ -8,9 +9,11 @@ import math
 from asyncio import TaskGroup
 from typing import Optional, TypedDict
 
+from pydantic import Field
 from langchain_chroma import Chroma
-from langchain_core.retrievers import RetrieverLike
-from langchain_core.vectorstores import VectorStore
+from langchain_core.documents import Document
+from langchain_core.retrievers import RetrieverLike, BaseRetriever
+from langchain_core.vectorstores import VectorStore, VectorStoreRetriever
 from langchain_ollama import OllamaEmbeddings
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -29,6 +32,7 @@ class FileInformation(TypedDict):
     tuuid: str
     user_id: str
     domain: str
+    cuuids: Optional[list[str]]
     metadata: dict
     mimetype: Optional[str]
     version: Optional[dict]
@@ -81,7 +85,9 @@ class DocumentIndexHandler:
 
         decryption_key: bytes = decode_base64_nopad(decryption_key_response.parsed['cle_secrete_base64'])
         query_bytes = await asyncio.to_thread(dechiffrer_bytes_secrete, decryption_key, encrypted_query)
-        query = query_bytes.decode('utf-8')
+        query_content = json.loads(query_bytes.decode('utf-8'))
+        query = query_content['query']
+        cuuid = query_content.get('cuuid')  # Directory to use
         user_id = message.certificat.get_user_id
 
         if user_id is None:
@@ -103,12 +109,23 @@ class DocumentIndexHandler:
 
         async with instance.semaphore:
             vector_store = await asyncio.to_thread(self.open_vector_store, Constantes.DOMAINE_GROS_FICHIERS, user_id, instance, embedding_model)
-            retriever = vector_store.as_retriever()
+
+            # Determine is we need to use a document filter
+            if cuuid and cuuid != '':
+                # Filter by directory
+                retriever = FilteredCuuidsRetriever(vectorstore=vector_store.as_retriever(), cuuid=cuuid)
+            else:
+                # No filter
+                retriever = vector_store.as_retriever()
 
             client = instance.get_async_client(self.__context.configuration)
             # Calculate doc limit using ~2 * context chars
             limit = math.floor(context_len * 2.5 / doc_chunk_len)
-            system_prompt, command_prompt, doc_ref = await format_prompt(retriever, query, limit)
+            try:
+                system_prompt, command_prompt, doc_ref = await format_prompt(retriever, query, limit)
+            except NoDocumentsFoundException:
+                return {'ok': False, 'code': 404, 'err': 'No matching documents found'}
+
             self.__logger.debug(f"PROMPT (limit: {limit}, len:{len(system_prompt) + len(command_prompt)})\n{command_prompt}")
             response = await client.generate(
                 model=query_model,
@@ -230,6 +247,7 @@ class DocumentIndexHandler:
             tuuid = job['tuuid']
             user_id = job['user_id']
             domain = job['domain']
+            cuuids = job.get('cuuids')
             metadata = job['decrypted_metadata']
             try:
                 filename = metadata['nom']
@@ -248,7 +266,7 @@ class DocumentIndexHandler:
                     instance = self.__context.pick_ollama_instance(embedding_model)
                     async with instance.semaphore:
                         vector_store = await asyncio.to_thread(self.open_vector_store, domain, user_id, instance, embedding_model)
-                        await asyncio.to_thread(index_pdf_file, vector_store, tuuid, filename, tmp_file)
+                        await asyncio.to_thread(index_pdf_file, vector_store, tuuid, filename, cuuids, tmp_file)
                 except (TypeError, ValueError, PdfStreamError) as e:
                     self.__logger.exception(f"Error processing file tuuid {tuuid}), rejecting: %s" % str(e))
                     pass  # The file will be marked as processed later on
@@ -301,6 +319,7 @@ class DocumentIndexHandler:
         for lease in leases:
             metadata = lease['metadata']
             version = lease.get('version')
+            cuuids = lease.get('cuuids')
             fuuid: Optional[str] = None
             if version:
                 fuuid = version['fuuid']
@@ -316,6 +335,7 @@ class DocumentIndexHandler:
                 'tuuid': lease['tuuid'],
                 'user_id': lease['user_id'],
                 'domain': Constantes.DOMAINE_GROS_FICHIERS,
+                'cuuids': cuuids,
                 'metadata': metadata,
                 'mimetype': lease.get('mimetype'),
                 'version': lease.get('version'),
@@ -364,7 +384,7 @@ class DocumentIndexHandler:
         return vector_store
 
 
-def index_pdf_file(vector_store: VectorStore, tuuid: str, filename: str, tmp_file: tempfile.NamedTemporaryFile, doc_len=1000, overlap=50):
+def index_pdf_file(vector_store: VectorStore, tuuid: str, filename: str, cuuids: Optional[list[str]], tmp_file: tempfile.NamedTemporaryFile, doc_len=1000, overlap=50):
     loader = PyPDFLoader(tmp_file.name, mode="single")
     document_list = loader.load()
     document = document_list[0]
@@ -376,15 +396,40 @@ def index_pdf_file(vector_store: VectorStore, tuuid: str, filename: str, tmp_fil
         chunk_no += 1
         chunk.id = doc_id
         chunk.metadata['source'] = filename
+        if cuuids is not None:
+            chunk.metadata['cuuids'] = ','.join(cuuids)
     vector_store.add_documents(list(chunks))
 
 
-async def format_prompt(retriever: RetrieverLike, query: str, limit: int) -> (str, str, list[dict]):
+class FilteredCuuidsRetriever(BaseRetriever):
+    vectorstore: VectorStoreRetriever
+    search_type: str = "similarity"
+    search_kwargs: dict = Field(default_factory=dict)
+    cuuid: str
+
+    def get_relevant_documents(self, query: str) -> list[Document]:
+        results = self.vectorstore.get_relevant_documents(query=query)
+        output = list()
+        for doc in results:
+            cuuids = doc.metadata.get('cuuids')
+            if cuuids is not None and self.cuuid in cuuids:
+                output.append(doc)
+        return output
+
+
+class NoDocumentsFoundException(Exception):
+    pass
+
+
+async def format_prompt(retriever: RetrieverLike, query: str, limit: int, filtre: Optional[dict[str, str]] = None) -> (str, str, list[dict]):
     context_response = await retriever.ainvoke(query, k=limit)
 
     doc_ref = list()
     for elem in context_response:
         doc_ref.append({"id": elem.id, "page_content": elem.page_content, "metadata": dict(elem.metadata)})
+
+    if len(doc_ref) == 0:
+        raise NoDocumentsFoundException()
 
     # Wrap the documents in <source /> tags with id
     context_tags: list[str] = list()
