@@ -37,9 +37,9 @@ class OllamaInstance:
             params = {'host':connection_url}
         return params
 
-    def get_async_client(self, configuration: OllamaConfiguration) -> AsyncClient:
+    def get_async_client(self, configuration: OllamaConfiguration, timeout=None) -> AsyncClient:
         options = self.get_client_options(configuration)
-        return AsyncClient(**options)
+        return AsyncClient(timeout=timeout, **options)
 
 
 class ChatConfiguration(TypedDict):

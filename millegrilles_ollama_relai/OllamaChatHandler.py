@@ -224,13 +224,65 @@ class OllamaChatHandler:
                 return False
 
             # Create the stream task
-            stream_coro = self.stream_chat_response(
-                chat_id, decryption_key, conversation_id, cle_id, user_id, new_conversation,
-                attached_tuuids, original_message, dechiffrage, enveloppe, correlation_id, reply_to, chat_stream)
+            output = dict()
+            stream_coro = self.stream_chat_response(chat_id, output, enveloppe, correlation_id, reply_to, chat_stream)
             stream_task = asyncio.create_task(stream_coro)
+
             # Save task to allow cancellation, then wait on completion
             self.__running_chats[chat_id] = stream_task
-            await stream_task
+
+            try:
+                await stream_task
+            except* asyncio.CancelledError as e:
+                # Response interrupted by user, save
+                if self.__context.stopping is True:
+                    raise e  # Stopping
+            finally:
+                # Cleanup task
+                try:
+                    del self.__running_chats[chat_id]
+                except KeyError:
+                    pass
+
+            # Join entire response in single string
+            complete_response = ''.join(output['response'])
+
+            # Check if the output was completed or interrupted
+            complete = output['complete']
+            if complete is False:
+                complete_response += '\n**INTERRUPTED BY USER**'
+
+            # Encrypt
+            cipher, encrypted_response = chiffrer_mgs4_bytes_secrete(decryption_key, complete_response)
+            encrypted_response['cle_id'] = cle_id
+
+            reply_command = {
+                'conversation_id': conversation_id,
+                'user_id': user_id,
+                'encrypted_content': encrypted_response,
+                'new': new_conversation,
+                'model': chat_model,
+                'role': 'assistant',
+            }
+            if attached_tuuids is not None:
+                reply_command['tuuids'] = attached_tuuids
+            attachements_echange = {'query': original_message}
+            attachements_echange.update(dechiffrage)
+
+            signed_command, command_id = self.__context.formatteur.signer_message(
+                ConstantesMilleGrilles.KIND_COMMANDE, reply_command, 'AiLanguage', action='chatExchange')
+
+            await producer.command(signed_command, 'AiLanguage', 'chatExchange',
+                                   exchange=ConstantesMilleGrilles.SECURITE_PROTEGE,
+                                   attachments=attachements_echange, noformat=True, timeout=2)
+
+            # Confirm to streaming client that message is complete
+            chunk = {
+                'message': {'content': ''},
+                'done': True,
+                'message_id': command_id
+            }
+            await producer.encrypt_reply([enveloppe], chunk, correlation_id=correlation_id, reply_to=reply_to, attachments={'stream': False})
 
         except Exception as e:
             self.__logger.exception("Unhandled error during chat")
@@ -247,13 +299,14 @@ class OllamaChatHandler:
             except KeyError:
                 pass  # Ok, could have been cancelled
 
-    async def stream_chat_response(self, chat_id: str, decryption_key, conversation_id, cle_id, user_id, new_conversation,
-                                   attached_tuuids, original_message, dechiffrage, enveloppe, correlation_id, reply_to, chat_stream):
+    async def stream_chat_response(self, chat_id: str, output: dict, enveloppe, correlation_id, reply_to, chat_stream):
         producer = await self.__context.get_producer()
         emit_interval = datetime.timedelta(milliseconds=750)
         next_emit = datetime.datetime.now() + emit_interval
         buffer = ''
         complete_response = []
+        output['response'] = complete_response
+        output['complete'] = False
         async for chunk in chat_stream:
             chunk = dict(chunk)
             chunk['message'] = dict(chunk['message'])
@@ -264,64 +317,27 @@ class OllamaChatHandler:
             except KeyError:
                 pass  # Ok, already removed or on another instance
 
-            attachments = None
             done = True
             try:
                 if chunk['done'] is not True:
-                    attachments = {'streaming': True}
                     done = False
             except KeyError:
                 pass
 
+            output['complete'] = done
+
             buffer += chunk['message']['content']
 
             now = datetime.datetime.now()
-            if attachments is None or now > next_emit:
+            if done or now > next_emit:
                 chunk['message']['content'] = buffer
                 complete_response.append(buffer)  # Keep for response transaction
                 buffer = ''
 
                 if done:
-                    # Join entire response in single string
-                    complete_response = ''.join(complete_response)
-                    # domaine_signature_obj = SignatureDomaines.from_dict(domain_signature)
-                    # cle_id = domaine_signature_obj.get_cle_ref()
+                    chunk['done'] = False  # Override flag, will bet set after save command
 
-                    # Encrypt
-                    cipher, encrypted_response = chiffrer_mgs4_bytes_secrete(decryption_key, complete_response)
-                    encrypted_response['cle_id'] = cle_id
-
-                    reply_command = {
-                        'conversation_id': conversation_id,
-                        'user_id': user_id,
-                        'encrypted_content': encrypted_response,
-                        'new': new_conversation,
-                        'model': chunk['model'],
-                        'role': 'assistant',
-                    }
-                    if attached_tuuids is not None:
-                        reply_command['tuuids'] = attached_tuuids
-                    del original_message['attachements']
-                    attachements_echange = {'query': original_message}
-                    attachements_echange.update(dechiffrage)
-
-                    signed_command, command_id = self.__context.formatteur.signer_message(
-                        ConstantesMilleGrilles.KIND_COMMANDE, reply_command, 'AiLanguage', action='chatExchange')
-                    chunk['message_id'] = command_id
-
-                    try:
-                        await producer.command(signed_command, 'AiLanguage', 'chatExchange',
-                                               exchange=ConstantesMilleGrilles.SECURITE_PROTEGE,
-                                               attachments=attachements_echange, noformat=True, timeout=2)
-
-                        chunk['chat_exchange_persisted'] = True
-                    except asyncio.TimeoutError:
-                        # Failure to save command, relay to user
-                        chunk['chat_exchange_persisted'] = False
-                        chunk['exchange_command'] = signed_command
-
-                await producer.encrypt_reply([enveloppe], chunk, correlation_id=correlation_id, reply_to=reply_to,
-                                             attachments=attachments)
+                await producer.encrypt_reply([enveloppe], chunk, correlation_id=correlation_id, reply_to=reply_to, attachments={'streaming': True})
 
                 next_emit = now + emit_interval
 
@@ -329,7 +345,7 @@ class OllamaChatHandler:
 
     async def ollama_chat(self, user_profile: dict, messages: list[dict], model: str, done: asyncio.Event):
         instance = self.__context.pick_ollama_instance(model)
-        client = instance.get_async_client(self.__context.configuration)
+        client = instance.get_async_client(self.__context.configuration, timeout=180)
         context_len = self.__context.chat_configuration.get('chat_context_length') or 4096
 
         # Check if the model supports tools

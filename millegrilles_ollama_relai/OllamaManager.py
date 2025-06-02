@@ -124,11 +124,7 @@ class OllamaManager:
         return await self.__query_handler.handle_commands(message)
 
     async def process_chat(self, message: MessageWrapper):
-        try:
-            return await self.__chat_handler.process_chat(message)
-        except* asyncio.CancelledError:
-            pass
-        return {'ok': False, 'err': 'Cancelled'}
+        return await self.__chat_handler.process_chat(message)
 
     async def cancel_chat(self, message: MessageWrapper):
         return await self.__chat_handler.cancel_chat(message)
