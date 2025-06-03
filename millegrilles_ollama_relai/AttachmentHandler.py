@@ -1,7 +1,10 @@
 import asyncio
 import binascii
+import logging
 import tempfile
+
 from urllib.parse import urljoin
+from typing import Optional
 
 import aiohttp
 
@@ -9,39 +12,74 @@ from millegrilles_messages.messages import Constantes
 from millegrilles_messages.chiffrage.DechiffrageUtils import get_decipher_cle_secrete
 from millegrilles_ollama_relai.OllamaContext import OllamaContext
 
+CONST_MAX_RETRY = 3
 
 class AttachmentHandler:
 
     def __init__(self, context: OllamaContext):
+        self.__logger = logging.getLogger(__name__ + '.' + self.__class__.__name__)
         self.__context = context
+
+        self.__session: Optional[aiohttp.ClientSession] = None
 
     async def download_decrypt_file(self, decrypted_key: str, job: dict, tmp_file: tempfile.TemporaryFile) -> int:
         fuuid = job['fuuid']
         decrypted_key_bytes = decode_base64pad(decrypted_key)
         decipher = get_decipher_cle_secrete(decrypted_key_bytes, job)
 
-        timeout = aiohttp.ClientTimeout(connect=5, total=600)
-        connector = self.__context.get_tcp_connector()
         file_size = 0
-        async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
-            session.verify = self.__context.tls_method != 'nocheck'
 
-            await filehost_authenticate(self.__context, session)
+        session = self.__session
+        for i in range(0, CONST_MAX_RETRY):
+            if self.__session is None:
+                timeout = aiohttp.ClientTimeout(connect=5, total=600)
+                connector = self.__context.get_tcp_connector()
+                session = aiohttp.ClientSession(timeout=timeout, connector=connector)
+                session.verify = self.__context.tls_method != 'nocheck'
+                try:
+                    await filehost_authenticate(self.__context, session)
+                    self.__session = session
+                except aiohttp.ClientResponseError:
+                    self.__logger.exception("Error authenticating")
+                    await self.__context.wait(2)
+                    continue  # Retry
 
             filehost_url = self.__context.filehost_url
             url_fichier = urljoin(filehost_url, f'filehost/files/{fuuid}')
-            async with session.get(url_fichier) as resp:
-                resp.raise_for_status()
+            try:
+                tmp_file.seek(0)  # Ensure we are at the beginning in case of client issue later on
+                async with session.get(url_fichier) as resp:
+                    resp.raise_for_status()
 
-                async for chunk in resp.content.iter_chunked(64*1024):
-                    await asyncio.to_thread(tmp_file.write, decipher.update(chunk))
+                    async for chunk in resp.content.iter_chunked(64*1024):
+                        await asyncio.to_thread(tmp_file.write, decipher.update(chunk))
+                        file_size += len(chunk)
+
+                    # Download successful
+                    chunk = decipher.finalize()
+                    await asyncio.to_thread(tmp_file.write, chunk)
                     file_size += len(chunk)
 
-        chunk = decipher.finalize()
-        await asyncio.to_thread(tmp_file.write, chunk)
-        file_size += len(chunk)
+                    return file_size
+            except aiohttp.ClientResponseError as cre:
+                if cre.status in [400, 401, 403]:
+                    self.__logger.debug("Not authenticated")
 
-        return file_size
+                    # Close session
+                    session = self.__session
+                    self.__session = None
+                    if session:
+                        await session.close()
+
+                    continue  # Retry with a new session
+                elif 500 <= cre.status < 600:
+                    self.__logger.info(f"Filehost server error: {cre.status}")
+                    await self.__context.wait(3)  # Wait in case the server is restarting
+                    continue  # Retry
+                else:
+                    raise cre
+
+        raise Exception("Attached file download - Too many retries")
 
     async def prepare_image(self, file_size: int, tmp_file: tempfile.TemporaryFile) -> bytes:
         tmp_file.seek(0)
