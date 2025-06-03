@@ -25,12 +25,14 @@ class AttachmentHandler:
     async def download_decrypt_file(self, decrypted_key: str, job: dict, tmp_file: tempfile.TemporaryFile) -> int:
         fuuid = job['fuuid']
         decrypted_key_bytes = decode_base64pad(decrypted_key)
-        decipher = get_decipher_cle_secrete(decrypted_key_bytes, job)
 
         file_size = 0
 
         session = self.__session
         for i in range(0, CONST_MAX_RETRY):
+            tmp_file.seek(0)  # Ensure we are at the beginning in case of client issue later on
+            decipher = get_decipher_cle_secrete(decrypted_key_bytes, job)
+
             if self.__session is None:
                 timeout = aiohttp.ClientTimeout(connect=5, total=600)
                 connector = self.__context.get_tcp_connector()
@@ -47,7 +49,6 @@ class AttachmentHandler:
             filehost_url = self.__context.filehost_url
             url_fichier = urljoin(filehost_url, f'filehost/files/{fuuid}')
             try:
-                tmp_file.seek(0)  # Ensure we are at the beginning in case of client issue later on
                 async with session.get(url_fichier) as resp:
                     resp.raise_for_status()
 
