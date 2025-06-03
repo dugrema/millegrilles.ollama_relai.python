@@ -206,10 +206,6 @@ class OllamaChatHandler:
 
             action = message.routage['action']
 
-            if action not in ['chat', 'generate']:
-                # Raising an exception sends the cancel event to the client
-                raise Exception('Unsupported action: %s' % action)
-
             # Run the query. Emit
             done_event = asyncio.Event()
             if action == 'chat':

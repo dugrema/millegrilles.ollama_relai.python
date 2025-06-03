@@ -25,7 +25,8 @@ class OllamaInstance:
         self.semaphore = asyncio.BoundedSemaphore(1)
 
     def is_available(self) -> bool:
-        return self.semaphore.locked()
+        """ @:returns True when instance is not locked (available immediately) """
+        return not self.semaphore.locked()
 
     def get_client_options(self, configuration: OllamaConfiguration) -> dict:
         connection_url = self.url
