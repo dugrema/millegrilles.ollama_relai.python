@@ -6,7 +6,7 @@ import ssl
 import pathlib
 
 from ollama import AsyncClient, ProcessResponse, ListResponse
-from typing import Optional, Any, Union, Mapping, TypedDict
+from typing import Optional, Any, TypedDict
 from urllib.parse import urlparse
 
 from millegrilles_messages.bus.BusContext import MilleGrillesBusContext
@@ -78,7 +78,6 @@ class OllamaContext(MilleGrillesBusContext):
         self.rag_configuration: Optional[RagConfiguration] = None
         self.chat_configuration: Optional[ChatConfiguration] = None
 
-
     @property
     def configuration(self) -> OllamaConfiguration:
         return super().configuration
@@ -93,10 +92,6 @@ class OllamaContext(MilleGrillesBusContext):
 
     async def get_producer(self):
         return await self.__bus_connector.get_producer()
-
-    # @property
-    # def ollama_http_semaphore(self) -> asyncio.BoundedSemaphore:
-    #     return self.__ollama_http_semaphore
 
     @property
     def filehost(self) -> Optional[Filehost]:
@@ -151,21 +146,6 @@ class OllamaContext(MilleGrillesBusContext):
         else:
             raise ValueError("No valid URL")
         return url, tls_method
-
-    # def get_client_options(self) -> dict:
-    #     configuration = self.configuration
-    #     connection_url = self.configuration.ollama_url
-    #     if connection_url.lower().startswith('https://'):
-    #         # Use a millegrille certificate authentication
-    #         cert = (configuration.cert_path, configuration.key_path)
-    #         params = {'host':connection_url, 'verify':configuration.ca_path, 'cert':cert}
-    #     else:
-    #         params = {'host':connection_url}
-    #     return params
-
-    # def get_async_client(self, instance: Optional[OllamaInstance] = None) -> AsyncClient:
-    #     options = self.get_client_options()
-    #     return AsyncClient(**options)
 
     def pick_ollama_instance(self, model: Optional[str] = None) -> OllamaInstance:
         if model:
