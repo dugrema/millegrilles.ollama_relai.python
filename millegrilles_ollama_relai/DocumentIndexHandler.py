@@ -283,7 +283,13 @@ class DocumentIndexHandler:
             # Mark the file as processed
             producer = await self.__context.get_producer()
             command = {"tuuid": tuuid, "user_id": user_id}
-            await producer.command(command, Constantes.DOMAINE_GROS_FICHIERS, "confirmRag", Constantes.SECURITE_PROTEGE)
+            for i in range(0, 5):
+                try:
+                    await producer.command(command, Constantes.DOMAINE_GROS_FICHIERS, "confirmRag", Constantes.SECURITE_PROTEGE, timeout=45)
+                    break
+                except asyncio.TimeoutError:
+                    self.__logger.warning("Timeout sending RAG result, will retry")
+                    await self.__context.wait(5)
 
     async def __query_batch_rag(self):
         producer = await self.__context.get_producer()
