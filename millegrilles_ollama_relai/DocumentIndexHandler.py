@@ -302,7 +302,8 @@ class DocumentIndexHandler:
 
         # Get the batch
         command = {"batch_size": batch_size, "filehost_id": filehost_id}
-        response = await producer.command(command, Constantes.DOMAINE_GROS_FICHIERS, "leaseForRag", Constantes.SECURITE_PROTEGE)
+        response = await producer.command(command, Constantes.DOMAINE_GROS_FICHIERS, "leaseForRag",
+                                          Constantes.SECURITE_PROTEGE, timeout=60)
         parsed = response.parsed
         if parsed['ok'] is not True:
             self.__logger.warning("Error retrieving batch of files for RAG: %s" % parsed)
