@@ -242,6 +242,13 @@ class OllamaChatHandler:
                 except KeyError:
                     pass
 
+            # Check if the output was completed or interrupted
+            complete = output['complete']
+            final_output = ''
+            if complete is False:
+                final_output = '\n\n**INTERRUPTED BY USER**'
+                output['content'].append(final_output)
+
             # Join entire response in single string
             complete_response_dict = {'content': ''.join(output['content'])}
             try:
@@ -251,11 +258,7 @@ class OllamaChatHandler:
             except KeyError:
                 pass  # No thinking block
 
-            # Check if the output was completed or interrupted
             complete_response = json.dumps(complete_response_dict)
-            complete = output['complete']
-            if complete is False:
-                complete_response += '\n**INTERRUPTED BY USER**'
 
             # Encrypt
             cipher, encrypted_response = chiffrer_mgs4_bytes_secrete(decryption_key, complete_response)
@@ -284,7 +287,7 @@ class OllamaChatHandler:
 
             # Confirm to streaming client that message is complete
             chunk = {
-                'message': {'content': ''},
+                'message': {'content': final_output},
                 'done': True,
                 'message_id': command_id
             }
