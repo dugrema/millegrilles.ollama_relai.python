@@ -1,6 +1,8 @@
 import asyncio
 import datetime
 import logging
+import json
+
 from asyncio import TaskGroup
 
 import multibase
@@ -209,7 +211,7 @@ class OllamaChatHandler:
             # Run the query. Emit
             done_event = asyncio.Event()
             if action == 'chat':
-                chat_stream = self.ollama_chat(user_profile, chat_messages, chat_model, done_event)
+                chat_stream = self.ollama_chat(user_profile, chat_messages, chat_model)
             else:
                 raise Exception('action %s not supported' % action)
 
@@ -241,9 +243,16 @@ class OllamaChatHandler:
                     pass
 
             # Join entire response in single string
-            complete_response = ''.join(output['response'])
+            complete_response_dict = {'content': ''.join(output['content'])}
+            try:
+                thinking = ''.join(output['thinking'])
+                if thinking != '':
+                    complete_response_dict['thinking'] = thinking
+            except KeyError:
+                pass  # No thinking block
 
             # Check if the output was completed or interrupted
+            complete_response = json.dumps(complete_response_dict)
             complete = output['complete']
             if complete is False:
                 complete_response += '\n**INTERRUPTED BY USER**'
@@ -256,6 +265,7 @@ class OllamaChatHandler:
                 'conversation_id': conversation_id,
                 'user_id': user_id,
                 'encrypted_content': encrypted_response,
+                'content_type': 'json',
                 'new': new_conversation,
                 'model': chat_model,
                 'role': 'assistant',
@@ -299,9 +309,12 @@ class OllamaChatHandler:
         producer = await self.__context.get_producer()
         emit_interval = datetime.timedelta(milliseconds=750)
         next_emit = datetime.datetime.now() + emit_interval
+        think = ''
         buffer = ''
+        think_response = []
         complete_response = []
-        output['response'] = complete_response
+        output['thinking'] = think_response
+        output['content'] = complete_response
         output['complete'] = False
         async for chunk in chat_stream:
             chunk = dict(chunk)
@@ -322,13 +335,20 @@ class OllamaChatHandler:
 
             output['complete'] = done
 
+            try:
+                think += chunk['message'].get('thinking')
+            except TypeError:
+                pass  # No think block
             buffer += chunk['message']['content']
 
             now = datetime.datetime.now()
             if done or now > next_emit:
+                chunk['message']['thinking'] = think
+                think_response.append(think)
                 chunk['message']['content'] = buffer
                 complete_response.append(buffer)  # Keep for response transaction
                 buffer = ''
+                think = ''
 
                 if done:
                     chunk['done'] = False  # Override flag, will bet set after save command
@@ -339,7 +359,7 @@ class OllamaChatHandler:
 
         return None
 
-    async def ollama_chat(self, user_profile: dict, messages: list[dict], model: str, done: asyncio.Event):
+    async def ollama_chat(self, user_profile: dict, messages: list[dict], model: str):
         instance = self.__context.pick_ollama_instance(model)
         client = instance.get_async_client(self.__context.configuration, timeout=180)
         context_len = self.__context.chat_configuration.get('chat_context_length') or 4096
@@ -351,8 +371,10 @@ class OllamaChatHandler:
                 tools = self.__tool_handler.tools()
             else:
                 tools = None
+            think = 'thinking' in model_info['capabilities'] or False
         except (TypeError, AttributeError, IndexError, KeyError):
             tools = None
+            think = False
 
         async with instance.semaphore:
             # Loop to allow tool calls by the model.
@@ -368,6 +390,7 @@ class OllamaChatHandler:
                     messages=messages,
                     tools=tools,
                     stream=True,
+                    think=think,
                     options={"num_ctx": context_len}
                 )
 
