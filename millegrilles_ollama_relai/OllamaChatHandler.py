@@ -10,7 +10,7 @@ import tempfile
 import subprocess
 import os
 
-from typing import Any, Optional, Coroutine
+from typing import Optional
 
 from millegrilles_messages.messages import Constantes as ConstantesMilleGrilles
 from millegrilles_messages.messages.MessagesModule import MessageWrapper
@@ -21,7 +21,7 @@ from millegrilles_messages.chiffrage.DechiffrageUtils import dechiffrer_bytes_se
 from millegrilles_ollama_relai.OllamaTools import OllamaToolHandler
 
 
-MAX_TOOL_ITERATIONS = 3
+MAX_TOOL_ITERATIONS = 4
 
 class OllamaChatHandler:
 
@@ -338,6 +338,15 @@ class OllamaChatHandler:
 
             output['complete'] = done
 
+            if chunk['message'].get('tool_calls'):
+                tools_called = True
+                tools_list = chunk['message']['tool_calls']
+                tool_names = [t.function.name for t in tools_list]
+                think += f'\n\n\n**TOOLS CALLED:** {', '.join(tool_names)}\n\n\n'
+                del chunk['message']['tool_calls']  # Calls cannot be serialized
+            else:
+                tools_called = False
+
             try:
                 think += chunk['message'].get('thinking')
             except TypeError:
@@ -345,7 +354,7 @@ class OllamaChatHandler:
             buffer += chunk['message']['content']
 
             now = datetime.datetime.now()
-            if done or now > next_emit:
+            if done or (tools_called is False and now > next_emit):
                 chunk['message']['thinking'] = think
                 think_response.append(think)
                 chunk['message']['content'] = buffer
@@ -399,22 +408,21 @@ class OllamaChatHandler:
 
                 # Keep the streaming output for tool calls
                 cumulative_output = ''
+                cumulative_thinking = ''
                 tools_called = False
 
                 async for part in stream:
                     if part.message.tool_calls:
                         # Tools are being invoked. Keep history of output for assistant.
-                        if len(cumulative_output) > 0:
-                            messages.append({'role': 'assistant', 'content': cumulative_output})
+                        if len(cumulative_output) > 0 or len(cumulative_thinking) > 0:
+                            messages.append({'role': 'assistant', 'content': cumulative_output, 'thinking': cumulative_thinking})
 
                         # Add message from assistant with calls to tools
                         messages.append(part.message)
 
                         # Reset output
                         cumulative_output = ''
-
-                        if len(cumulative_output) > 0:
-                            messages.append({'role': 'assistant', 'content': cumulative_output})
+                        cumulative_thinking = ''
 
                         self.__logger.debug("Calling tools: %s" % part.message.tool_calls)
                         for tool_call in part.message.tool_calls:
@@ -423,10 +431,16 @@ class OllamaChatHandler:
                             tools_called = True
 
                     cumulative_output += part.message.content
-                    if part.message.tool_calls or (part.done and tools_called):
-                        pass  # Avoid yielding part with tool calls, need to handle here first
-                    else:
-                        yield part
+                    try:
+                        cumulative_thinking += part.message.thinking
+                    except TypeError:
+                        pass
+
+                    # if part.message.tool_calls or (part.done and tools_called):
+                    #     pass  # Avoid yielding part with tool calls, need to handle here first
+                    # else:
+                    #     yield part
+                    yield part
 
                 # If no tools were called, the chat is done. If we have tool responses, loop for a new iteration.
                 if tools_called is False:
@@ -439,7 +453,8 @@ class OllamaChatHandler:
         while self.__context.stopping is False:
             producer = await self.__context.get_producer()
 
-            for correlation_info in correlations.values():
+            correlation_values = list(correlations.values())
+            for correlation_info in correlation_values:
                 await producer.reply({'ok': True, 'evenement': event_name},
                                      correlation_id=correlation_info['correlation_id'], reply_to=correlation_info['reply_to'],
                                      attachments={'streaming': True})

@@ -31,7 +31,7 @@ class OllamaTool:
 
         return self._tool_list_cache
 
-    async def run_tool(self, user_profile: dict, context: OllamaContext, function_name: str, args: Optional[dict: [str, Any]]):
+    async def run_tool(self, user_profile: dict, _context: OllamaContext, function_name: str, args: Optional[dict: [str, Any]]):
         if args is None:
             args = dict()
 
