@@ -39,11 +39,12 @@ class OllamaTool:
 
         try:
             tool = [t for t in self._tools if t['function']['name'] == function_name].pop()
-            try:
-                function_to_call = tool['async_call']
-            except KeyError:
-                return await asyncio.to_thread(tool['call'], **args)
-            else:
-                return await function_to_call(**args)
         except (KeyError, IndexError):
             raise Exception(f'Unknown tool: {function_name}')
+
+        try:
+            function_to_call = tool['async_call']
+        except KeyError:
+            return await asyncio.to_thread(tool['call'], **args)
+        else:
+            return await function_to_call(**args)

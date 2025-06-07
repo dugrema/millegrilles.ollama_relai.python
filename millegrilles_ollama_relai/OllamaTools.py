@@ -36,7 +36,8 @@ class OllamaToolHandler:
         else:
             arguments = tool_call.function.arguments
             try:
-                return await module_info.run_tool(user_profile, self.__context, function_name, arguments)
+                result: str = await module_info.run_tool(user_profile, self.__context, function_name, arguments)
+                return result
             except Exception as e:
                 self.__logger.exception("Error running tool")
-                return f'Error during tool execution: {e}'
+                return f'ERROR during tool execution: {e}'
