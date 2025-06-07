@@ -342,7 +342,7 @@ class OllamaChatHandler:
                 tools_called = True
                 tools_list = chunk['message']['tool_calls']
                 tool_names = [t.function.name for t in tools_list]
-                think += f'\n\n\n**TOOLS CALLED:** {', '.join(tool_names)}\n\n\n'
+                think += f'\n\n> **TOOLS CALLED:** {', '.join(tool_names)}\n\n'
                 del chunk['message']['tool_calls']  # Calls cannot be serialized
             else:
                 tools_called = False
