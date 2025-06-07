@@ -19,7 +19,7 @@ class ToolTime(OllamaTool):
             'type': 'function',
             'function': {
                 'name': f'{self.name}_get_current_utc_date_and_time',
-                'description': 'Returns the current UTC date and time',
+                'description': 'Returns the current UTC date and time by using strftime("%a, %d %b %Y %H:%M:%S")',
             },
             'call': _get_current_utc_date_and_time,
         })
@@ -27,7 +27,7 @@ class ToolTime(OllamaTool):
             'type': 'function',
             'function': {
                 'name': f'{self.name}_get_current_user_date_and_time',
-                'description': 'Returns the current user\'s date and time with appropriate timezone',
+                'description': 'Returns the current user\'s date and time with the timezone by using strftime("%a, %d %b %Y %H:%M:%S %Z")',
                 'parameters': {
                     'type': 'object',
                     'required': [],
