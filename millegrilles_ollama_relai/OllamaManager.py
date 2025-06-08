@@ -6,6 +6,7 @@ import httpx
 from asyncio import TaskGroup
 from typing import Callable, Awaitable, Optional, Union, Mapping, Any
 
+from millegrilles_messages.bus.BusContext import ForceTerminateExecution
 from millegrilles_messages.messages import Constantes
 from millegrilles_messages.messages.MessagesModule import MessageWrapper
 from millegrilles_messages.structs.Filehost import Filehost
@@ -50,15 +51,22 @@ class OllamaManager:
         # Free threads
         self.__load_ai_configuration_event.set()
         self.__load_filehost_event.set()
+        await asyncio.sleep(0.5)
 
     async def run(self):
         self.__logger.debug("OllamaManager Starting")
-        async with TaskGroup() as group:
-            group.create_task(self.__reload_filehost_thread())
-            group.create_task(self.__staging_cleanup())
-            group.create_task(self.__reload_ai_configuration_thread())
-            group.create_task(self.__ollama_watchdog_thread())
-            group.create_task(self.__stop_thread())
+        try:
+            async with TaskGroup() as group:
+                group.create_task(self.__reload_filehost_thread())
+                group.create_task(self.__reload_ai_configuration_thread())
+                group.create_task(self.__ollama_watchdog_thread())
+                group.create_task(self.__stop_thread())
+        except* (asyncio.CancelledError, ForceTerminateExecution):
+            if self.__context.stopping is False:
+                self.__logger.warning("Ollama manager cancelled / forced to terminate without setting context to stop")
+                self.__context.stop()
+            else:
+                self.__logger.info("OllamaManager tasks cancelled, stopping")
         self.__logger.debug("OllamaManager Done")
 
     def add_filehost_listener(self, listener: Callable[[Optional[Filehost]], Awaitable[None]]):
@@ -77,6 +85,8 @@ class OllamaManager:
                 self.__logger.exception("Error loading filehost configuration")
                 await self.__context.wait(15)
 
+        self.__logger.info("__reload_filehost_thread Stopping")
+
     async def reload_filehost_configuration(self):
         producer = await self.__context.get_producer()
         response = await producer.request(
@@ -94,12 +104,6 @@ class OllamaManager:
         for l in self.__filehost_listeners:
             await l(self.__context.filehost)
 
-    async def __staging_cleanup(self):
-        while self.__context.stopping is False:
-            # TODO - cleanup
-
-            await self.__context.wait(300)
-
     async def trigger_reload_ai_configuration(self):
         self.__logger.info("Reloading AI Configuration on event")
         self.__load_ai_configuration_event.set()
@@ -116,6 +120,8 @@ class OllamaManager:
             except:
                 self.__logger.exception("Error loading ai configuration")
                 await self.__context.wait(20)
+
+        self.__logger.info("__reload_ai_configuration_thread Stopping")
 
     async def handle_volalile_request(self, message: MessageWrapper):
         return await self.__query_handler.handle_requests(message)
@@ -181,7 +187,12 @@ class OllamaManager:
                     status_event, 'ollama_relai', 'status',
                     exchange=Constantes.SECURITE_PRIVE)
 
-            await self.__context.wait(10)
+            try:
+                await self.__context.wait(10)
+            except ForceTerminateExecution:
+                pass
+
+        self.__logger.info("__ollama_watchdog_thread Stopping")
 
     async def __check_ollama_status(self):
         instances = self.__context.ollama_instances
