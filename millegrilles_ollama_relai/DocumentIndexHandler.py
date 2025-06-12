@@ -172,6 +172,8 @@ class DocumentIndexHandler:
                     await self.__query_batch_rag()
                 except asyncio.TimeoutError:
                     self.__logger.warning("Timeout querying for files to index")
+                except (AttributeError, KeyError, ValueError) as e:
+                    self.__logger.warning("Error loading file or filehost configuration: %s" % e)
 
             await self.__event_fetch_jobs.wait()
 

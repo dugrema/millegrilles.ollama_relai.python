@@ -4,7 +4,7 @@ import pathlib
 import httpx
 
 from asyncio import TaskGroup
-from typing import Callable, Awaitable, Optional, Union, Mapping, Any
+from typing import Callable, Awaitable, Optional
 
 from millegrilles_messages.bus.BusContext import ForceTerminateExecution
 from millegrilles_messages.messages import Constantes
@@ -74,16 +74,18 @@ class OllamaManager:
 
     async def __reload_filehost_thread(self):
         while self.__context.stopping is False:
+            self.__load_filehost_event.clear()
             try:
-                self.__load_filehost_event.clear()
                 await self.reload_filehost_configuration()
-                try:
-                    await asyncio.wait_for(self.__load_filehost_event.wait(), 900)
-                except asyncio.TimeoutError:
-                    pass  # Loop
-            except:
-                self.__logger.exception("Error loading filehost configuration")
+            except asyncio.TimeoutError as e:
+                self.__logger.error("Error loading filehost configuration: %s" % e)
                 await self.__context.wait(15)
+                continue  # Loop immediately
+
+            try:
+                await asyncio.wait_for(self.__load_filehost_event.wait(), 900)
+            except asyncio.TimeoutError:
+                pass  # Loop
 
         self.__logger.info("__reload_filehost_thread Stopping")
 
@@ -97,7 +99,7 @@ class OllamaManager:
             filehost_dict = filehost_response['filehost']
             filehost = Filehost.load_from_dict(filehost_dict)
             self.__context.filehost = filehost
-        except:
+        except (KeyError, AttributeError, ValueError):
             self.__logger.exception("Error loading filehost")
             self.__context.filehost = None
 
@@ -113,13 +115,14 @@ class OllamaManager:
             try:
                 self.__load_ai_configuration_event.clear()
                 await self.__reload_ai_configuration()
-                try:
-                    await asyncio.wait_for(self.__load_ai_configuration_event.wait(), 300)
-                except asyncio.TimeoutError:
-                    pass  # Loop
-            except:
+            except asyncio.TimeoutError:
                 self.__logger.exception("Error loading ai configuration")
                 await self.__context.wait(20)
+
+            try:
+                await asyncio.wait_for(self.__load_ai_configuration_event.wait(), 300)
+            except asyncio.TimeoutError:
+                pass  # Loop
 
         self.__logger.info("__reload_ai_configuration_thread Stopping")
 
