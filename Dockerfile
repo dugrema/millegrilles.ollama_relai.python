@@ -1,4 +1,4 @@
-FROM docker.maple.maceroc.com:5000/millegrilles_messages_python:2024.9.91 as stage1
+FROM registry.millegrilles.com/millegrilles/messages_python:2025.4.104 as stage1
 
 # Install dependencies
 RUN apt-get update && \
