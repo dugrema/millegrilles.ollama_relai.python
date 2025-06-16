@@ -129,6 +129,16 @@ class MgbusHandler:
 
         action = message.routage['action']
 
+        # Dedupe messages received on queues with same models
+        # All ollama instances are registered for all their models. A processing message goes to all supporting queues at
+        # the same time. This is used to ensure only one ollama instance is allowed to process the same message by id.
+        message_id = message.id
+        try:
+            self.__ollama_instances.claim_query(message_id)
+        except Exception:
+            self.__logger.debug(f"Query {message_id} already running on other ollama instance, skipping")
+            return False
+
         if action == 'chat':
             return await self.__manager.process_chat(instance, message)
 

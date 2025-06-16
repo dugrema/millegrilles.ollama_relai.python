@@ -1,5 +1,6 @@
 import asyncio
 import binascii
+import datetime
 
 import httpx
 import logging
@@ -220,6 +221,10 @@ class OllamaInstanceManager:
         self.__group: Optional[asyncio.TaskGroup] = None
         self.__message_cb: Optional[Callable[[str, MessageWrapper], Awaitable[Optional[dict]]]] = None
 
+        # Cache of all queries that have started processing for which the message is not yet expired
+        # Used to deduplicate query processing across multiple instances.
+        self.__query_dedupe_memory: dict[str, dict] = dict()
+
     @property
     def ready(self) -> bool:
         return self.__ollama_ready
@@ -250,6 +255,7 @@ class OllamaInstanceManager:
         async with asyncio.TaskGroup() as group:
             self.__group = group
             group.create_task(self.__status_thread())
+            group.create_task(self.__query_cache_maintenance_thread())
             group.create_task(self.__stop_thread())
 
         # Cleanup
@@ -357,6 +363,29 @@ class OllamaInstanceManager:
                 'capabilities': model.capabilities,
             })
         return models
+
+    async def __query_cache_maintenance_thread(self):
+        while self.__context.stopping is False:
+
+            expired = datetime.datetime.now() - datetime.timedelta(seconds=900)
+            to_remove = list()
+
+            for (k, v) in self.__query_dedupe_memory.items():
+                if v['date'] < expired:
+                    to_remove.append(k)
+
+            for q_id in to_remove:
+                del self.__query_dedupe_memory[q_id]
+
+            await self.__context.wait(180)
+
+    def claim_query(self, query_id: str):
+        try:
+            _info = self.__query_dedupe_memory[query_id]  # KeyError if not present
+            raise Exception('Already processing')
+        except KeyError:
+            # Ok, assign to process
+            self.__query_dedupe_memory[query_id] = {'date': datetime.datetime.now()}
 
     # async def __check_ollama_status(self):
     #     instances = self.__instances
