@@ -11,13 +11,14 @@ from typing import Optional, Any, Coroutine, Callable, Awaitable
 
 from millegrilles_messages.messages import Constantes
 from millegrilles_ollama_relai import Constantes as OllamaConstants
-from millegrilles_messages.bus.BusContext import MilleGrillesBusContext
 from millegrilles_messages.bus.PikaChannel import MilleGrillesPikaChannel
 from millegrilles_messages.bus.PikaQueue import MilleGrillesPikaQueueConsumer, RoutingKey
 from millegrilles_messages.messages.Hachage import hacher
 from millegrilles_messages.messages.MessagesModule import MessageWrapper
 from millegrilles_ollama_relai.OllamaConfiguration import OllamaConfiguration
 from millegrilles_ollama_relai.OllamaContext import OllamaContext
+
+LOGGER = logging.getLogger(__name__)
 
 class OllamaModelParams:
 
@@ -188,33 +189,6 @@ class OllamaInstance:
 
     async def __process_message(self, message: MessageWrapper):
         return await self.__message_cb(self, message)
-        # action = message.routage['action']
-        # enveloppe = message.certificat
-        #
-        # try:
-        #     # Processing for system commands
-        #     _exchanges = enveloppe.get_exchanges
-        #
-        #     if action == 'index':
-        #         return {'ok': False, 'err': 'Not implemented'}
-        # except ExtensionNotFound:
-        #     pass  # Move on to user queries
-        #
-        # try:
-        #     # User queries
-        #     _user_id = enveloppe.get_user_id
-        #
-        #     if action == 'chat':
-        #         return {'ok': False, 'err': 'Not implemented'}
-        #     elif action == 'generate':
-        #         return {'ok': False, 'err': 'Not implemented'}
-        #     elif action == 'queryRag':
-        #         return {'ok': False, 'err': 'Not implemented'}
-        #
-        # except ExtensionNotFound:
-        #     pass
-        #
-        # return {'ok': False, 'code': 404, 'err': 'Unknown action or unauthorized'}
 
 
 class OllamaInstanceManager:
@@ -272,26 +246,6 @@ class OllamaInstanceManager:
         # Cleanup
         self.__group = None
 
-    # def pick_ollama_instance(self, model: Optional[str] = None) -> OllamaInstance:
-    #     if model:
-    #         matching_instances = list()
-    #         for instance in self.__instances:
-    #             # Make sure the instance is available
-    #             if instance.ollama_status is not None:
-    #                 # Extract a list of models to check if any match the currently requested model
-    #                 models = [m.model for m in instance.ollama_models.models]
-    #                 if model in models:
-    #                     matching_instances.append(instance)
-    #     else:
-    #         matching_instances = [i for i in self.__instances if i.ollama_status is not None]
-    #
-    #     for instance in matching_instances:
-    #         if instance.is_available():
-    #             return instance
-    #
-    #     # No instance currently free, just return the first matching instance. Implement round-robin later.
-    #     return matching_instances[0]
-
     def update_instance_list(self, urls: list[str]):
         url_set = set(urls)
 
@@ -324,15 +278,6 @@ class OllamaInstanceManager:
         :param ready:
         :return:
         """
-        # if ready and self.__ollama_ready is False:
-        #     self.__ollama_ready = True
-        #
-        #     # Emit ready event
-        #     self.__logger.info("ollama Status now ready")
-        #     producer = await self.__context.get_producer()
-        #     status_event = {'event_type': 'availability', 'available': True}
-        #     await producer.event(status_event, 'ollama_relai', 'status', exchange=Constantes.SECURITE_PRIVE)
-
         self.__status_event.set()
 
     async def __status_thread(self):
@@ -413,55 +358,6 @@ class OllamaInstanceManager:
         except IndexError:
             return None
 
-    # async def __check_ollama_status(self):
-    #     instances = self.__instances
-    #
-    #     models = set()
-    #     for instance in instances:
-    #         self.__logger.debug(f"Checking with {instance.url}")
-    #         client = instance.get_async_client(self.__context.configuration)
-    #         status = False
-    #         try:
-    #             # Test connection by getting currently loaded model information
-    #             async with instance.semaphore:
-    #                 instance.ollama_status = await client.ps()
-    #                 instance.ollama_models = await client.list()
-    #                 for model in instance.ollama_models.models:
-    #                     try:
-    #                         self.__ollama_instances.ollama_model_params[model.model]
-    #                     except KeyError:
-    #                         params = dict()
-    #                         model_info = await client.show(model.model)
-    #                         params['capabilities'] = model_info.capabilities
-    #                         self.__ollama_instances.ollama_model_params[model.model] = params
-    #
-    #                 instance_models = [m.model for m in instance.ollama_models.models]
-    #                 models.update(instance_models)
-    #                 status = True
-    #                 self.__logger.debug(f"Connection OK: {instance.url}")
-    #         except (httpx.ConnectError, ConnectionError) as e:
-    #             # Failed to connect
-    #             if self.__logger.isEnabledFor(logging.DEBUG):
-    #                 self.__logger.exception(f"Connection error on {instance.url}")
-    #             else:
-    #                self.__logger.info(f"Connection error on {instance.url}: %s" % str(e))
-    #             instance.status = None  # Reset status, avoids picking this instance up
-    #
-    #         # Indicates at least one instance is responsive
-    #         self.__context.ollama_status = status
-    #         ollama_models = list()
-    #         for m in models:
-    #             model_info = {'name': m}
-    #             try:
-    #                 params = self.__ollama_instances.ollama_model_params[m]
-    #                 model_info.update(params)
-    #             except KeyError:
-    #                 pass
-    #             ollama_models.append(model_info)
-    #
-    #         # self.__context.ollama_models = [{'name': m} for m in models]
-    #         self.__context.ollama_models = ollama_models
-
 async def create_instance_channel(context: OllamaContext,
                                   instance_id: str,
                                   on_message: Callable[[MessageWrapper], Coroutine[Any, Any, None]]) -> (MilleGrillesPikaChannel, MilleGrillesPikaQueueConsumer):
@@ -475,10 +371,14 @@ async def create_instance_channel(context: OllamaContext,
     q_instance = MilleGrillesPikaQueueConsumer(context, on_message, queue_name, arguments={'x-message-ttl': 900_000})
 
     await context.bus_connector.add_channel(q_channel)
-    q_channel.add_queue(q_instance)
 
-    await q_channel.start_consuming()
-    await asyncio.wait_for(q_channel.ready.wait(), 10)
+    try:
+        await asyncio.wait_for(q_channel.ready.wait(), 5)
+    except asyncio.TimeoutError:
+        LOGGER.warning("Timeout waiting for q_channel ready, starting consumer")
+        await q_channel.start_consuming()
+
+    await q_channel.add_queue_consume(q_instance)
 
     return q_channel, q_instance
 
