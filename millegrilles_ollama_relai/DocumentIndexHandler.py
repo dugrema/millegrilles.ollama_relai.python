@@ -283,7 +283,7 @@ class DocumentIndexHandler:
                     embedding_model = rag_configuration['model_embedding_name']
                     instance = self.__ollama_instances.pick_instance_for_model(embedding_model)
                     if instance is None:
-                        raise Exception('Unsupported model')
+                        raise Exception(f'Unsupported model: {embedding_model}')
 
                     async with instance.semaphore:
                         vector_store = await asyncio.to_thread(self.open_vector_store, domain, user_id, instance, embedding_model)

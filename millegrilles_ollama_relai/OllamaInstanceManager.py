@@ -80,6 +80,9 @@ class OllamaInstance:
             await self.__channel.close()
         except AttributeError:
             pass  # Channel not open
+        finally:
+            # Shutting down
+            await self.__status_cb(False)
 
     async def __maintain(self):
         # Fetch status, models from ollama instance server
@@ -88,8 +91,9 @@ class OllamaInstance:
         await self.__status_cb(self.__ready)
 
     async def __create_channel(self):
-        producer = await self.__context.get_producer()  # Wait for MQ to be running
-        channel, consumer = await create_instance_channel(self.__context, self.__process_message)
+        instance_id = self.url
+        instance_id = instance_id.replace('/', '_').replace(':', '_')
+        channel, consumer = await create_instance_channel(self.__context, instance_id, self.__process_message)
         self.__channel = channel
         self.__consumer = consumer
         # await self.__context.bus_connector.add_channel(self.__channel)
@@ -138,9 +142,14 @@ class OllamaInstance:
         except AttributeError:
             return  # Consumer not ready yet
 
+        current_model_ids = set()
+        for rk in current_rks:
+            model_id = rk.routing_key.split('.')[2]
+            current_model_ids.add(model_id)
+
         model_ids = set(self.__ollama_model_by_id.keys())
-        new_model_ids = model_ids.difference(current_rks)
-        ids_to_remove = current_rks.difference(model_ids)
+        new_model_ids = model_ids.difference(current_model_ids)
+        ids_to_remove = current_model_ids.difference(model_ids)
 
         # Remove routing keys that are no longer handled
         for model_id in ids_to_remove:
@@ -454,23 +463,23 @@ class OllamaInstanceManager:
     #         self.__context.ollama_models = ollama_models
 
 async def create_instance_channel(context: OllamaContext,
+                                  instance_id: str,
                                   on_message: Callable[[MessageWrapper], Coroutine[Any, Any, None]]) -> (MilleGrillesPikaChannel, MilleGrillesPikaQueueConsumer):
 
-    # nom_ou = context.signing_key.enveloppe.subject_organizational_unit_name
-    # if nom_ou is None:
-    #     raise Exception('Invalid certificate - no Organizational Unit (OU) name')
-    queue_name = ''  # f'{nom_ou}/processing'
+    nom_ou = context.signing_key.enveloppe.subject_organizational_unit_name
+    if nom_ou is None:
+        raise Exception('Invalid certificate - no Organizational Unit (OU) name')
+    queue_name = f'{nom_ou}/processing/{instance_id}'
 
     q_channel = MilleGrillesPikaChannel(context, prefetch_count=1)
+    q_instance = MilleGrillesPikaQueueConsumer(context, on_message, queue_name, arguments={'x-message-ttl': 900_000})
+
     await context.bus_connector.add_channel(q_channel)
+    q_channel.add_queue(q_instance)
+
+    await q_channel.start_consuming()
     await asyncio.wait_for(q_channel.ready.wait(), 10)
 
-    q_instance = MilleGrillesPikaQueueConsumer(context, on_message, queue_name, exclusive=True, arguments={'x-message-ttl': 900_000})
-
-    # q_instance.add_routing_key(RoutingKey(
-    #     Constantes.SECURITE_PROTEGE, f'commande.{OllamaConstants.DOMAIN_OLLAMA_RELAI}.traitement'))
-
-    await q_channel.add_queue_consume(q_instance)
     return q_channel, q_instance
 
 
