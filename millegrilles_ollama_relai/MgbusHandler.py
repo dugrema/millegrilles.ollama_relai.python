@@ -97,18 +97,13 @@ class MgbusHandler:
                 models = self.__ollama_instances.get_models()
                 return {'ok': True, 'models': models}
             elif action == 'queryRag':
-                return await self.requeue_model_process(message)
+                return await self.__manager.register_rag_query(message)
         elif message_type == 'commande':
             if action == 'chat':
                 return await self.__manager.register_chat(message)
 
         self.__logger.info("__on_volatile_message Ignoring unknown action %s", message.routing_key)
         return {'ok': False, 'code': 404, 'err': 'Unknown operation'}
-
-    async def requeue_model_process(self, message: MessageWrapper):
-        model = message.parsed['model']
-        model_id = model_name_to_id(model)
-        raise NotImplementedError('TODO')
 
     async def __on_ollama_instance_message(self, instance: OllamaInstance, message: MessageWrapper):
         """
@@ -141,6 +136,8 @@ class MgbusHandler:
 
         if action == 'chat':
             return await self.__manager.process_chat(instance, message)
+        elif action == 'queryRag':
+            return await self.__manager.query_rag(instance, message)
 
         self.__logger.info("__on_processing_message Ignoring unknown action %s", message.routing_key)
         return {'ok': False, 'code': 404, 'err': 'Unknown operation'}

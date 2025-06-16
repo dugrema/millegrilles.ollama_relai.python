@@ -25,7 +25,7 @@ from millegrilles_messages.messages import Constantes
 from millegrilles_messages.messages.MessagesModule import MessageWrapper
 from millegrilles_ollama_relai.AttachmentHandler import AttachmentHandler
 from millegrilles_ollama_relai.OllamaContext import OllamaContext
-from millegrilles_ollama_relai.OllamaInstanceManager import OllamaInstance
+from millegrilles_ollama_relai.OllamaInstanceManager import OllamaInstance, model_name_to_id
 from millegrilles_ollama_relai.Util import decode_base64_nopad
 
 
@@ -66,10 +66,29 @@ class DocumentIndexHandler:
     async def setup(self):
         pass
 
+    async def register_rag(self, message: MessageWrapper):
+        producer = await self.__context.get_producer()
+
+        # Re-emit the message on the model's process Q
+        query_model = self.__context.rag_configuration['model_query_name']
+        model_id = model_name_to_id(query_model)
+
+        # attachements = {'correlation_id': message.correlation_id, 'reply_to': message.reply_to}
+        # attachements.update(message.original['attachements'])
+
+        await producer.command(
+            message.original, domain='ollama_relai', partition=model_id, action='process',
+            reply_to=message.reply_to, correlation_id=message.correlation_id,
+            exchange=Constantes.SECURITE_PROTEGE,
+            noformat=True, nowait=True)
+
+        return False  # The response is handled by the processing instance
+
+
     async def trigger_indexing(self):
         self.__event_fetch_jobs.set()
 
-    async def query_rag(self, message: MessageWrapper) -> Optional[dict]:
+    async def query_rag(self, instance: OllamaInstance, message: MessageWrapper) -> Optional[dict]:
         # Recover the keys, send to MaitreDesCles to get the decrypted value
         encrypted_query = message.parsed['encrypted_query']
         domain_signature = encrypted_query['key']['signature']
@@ -102,11 +121,6 @@ class DocumentIndexHandler:
         embedding_model = rag_configuration['model_embedding_name']
         context_len = rag_configuration.get('context_len')
         doc_chunk_len = rag_configuration.get('document_chunk_len')
-
-        try:
-            instance = self.__context.pick_ollama_instance(query_model)
-        except IndexError:
-            return {'ok': False, 'err': 'No ollama instance available'}
 
         async with instance.semaphore:
             vector_store = await asyncio.to_thread(self.open_vector_store, Constantes.DOMAINE_GROS_FICHIERS, user_id, instance, embedding_model)
