@@ -152,7 +152,6 @@ class OllamaInstance:
             await self.__consumer.add_bind_routing_key(RoutingKey(
                 Constantes.SECURITE_PROTEGE, f'commande.{OllamaConstants.DOMAIN_OLLAMA_RELAI}.{model_id}.process'))
 
-
     def get_client_options(self, configuration: OllamaConfiguration) -> dict:
         connection_url = self.url
         if connection_url.lower().startswith('https://'):
@@ -174,6 +173,9 @@ class OllamaInstance:
     def get_model(self, model_name: str):
         model_id = model_name_to_id(model_name)
         return self.__ollama_model_by_id[model_id]
+
+    def has_model_id(self, model_id: str) -> bool:
+        return self.__ollama_model_by_id.get(model_id) is not None
 
     async def __process_message(self, message: MessageWrapper):
         return await self.__message_cb(self, message)
@@ -386,6 +388,21 @@ class OllamaInstanceManager:
         except KeyError:
             # Ok, assign to process
             self.__query_dedupe_memory[query_id] = {'date': datetime.datetime.now()}
+
+    def pick_instance_for_model(self, model: str) -> Optional[OllamaInstance]:
+        model_id = model_name_to_id(model)
+
+        instances = [i for i in self.__instances if i.has_model_id(model_id)]
+
+        for i in instances:
+            if not i.semaphore.locked():
+                return i
+
+        # All instances locked, return one at random
+        try:
+            return instances[0]
+        except IndexError:
+            return None
 
     # async def __check_ollama_status(self):
     #     instances = self.__instances

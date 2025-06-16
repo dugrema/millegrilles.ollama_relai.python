@@ -25,7 +25,7 @@ from millegrilles_messages.messages import Constantes
 from millegrilles_messages.messages.MessagesModule import MessageWrapper
 from millegrilles_ollama_relai.AttachmentHandler import AttachmentHandler
 from millegrilles_ollama_relai.OllamaContext import OllamaContext
-from millegrilles_ollama_relai.OllamaInstanceManager import OllamaInstance, model_name_to_id
+from millegrilles_ollama_relai.OllamaInstanceManager import OllamaInstance, model_name_to_id, OllamaInstanceManager
 from millegrilles_ollama_relai.Util import decode_base64_nopad
 
 
@@ -50,9 +50,10 @@ QUERY_BATCH_RAG_LEN = 30
 
 class DocumentIndexHandler:
 
-    def __init__(self, context: OllamaContext, attachment_handler: AttachmentHandler):
+    def __init__(self, context: OllamaContext, ollama_instances: OllamaInstanceManager, attachment_handler: AttachmentHandler):
         self.__logger = logging.getLogger(__name__ + '.' + self.__class__.__name__)
         self.__context = context
+        self.__ollama_instances = ollama_instances
         self.__attachment_handler = attachment_handler
 
         self.__semaphore_db = asyncio.BoundedSemaphore(1)
@@ -280,7 +281,10 @@ class DocumentIndexHandler:
                         raise Exception("No RAG configuration provided - configure it with MilleGrilles AiChat")
 
                     embedding_model = rag_configuration['model_embedding_name']
-                    instance = self.__context.pick_ollama_instance(embedding_model)
+                    instance = self.__ollama_instances.pick_instance_for_model(embedding_model)
+                    if instance is None:
+                        raise Exception('Unsupported model')
+
                     async with instance.semaphore:
                         vector_store = await asyncio.to_thread(self.open_vector_store, domain, user_id, instance, embedding_model)
                         await asyncio.to_thread(index_pdf_file, vector_store, tuuid, filename, cuuids, tmp_file)
