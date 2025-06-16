@@ -5,7 +5,7 @@ import httpx
 import logging
 
 import redis.asyncio as redis
-from redis.exceptions import ConnectionError
+from redis.exceptions import ConnectionError as RedisConnectionError
 from ollama import AsyncClient, ProcessResponse, ListResponse, ShowResponse
 from typing import Optional, Any, Coroutine, Callable, Awaitable
 
@@ -135,7 +135,12 @@ class OllamaInstance:
                 self.__logger.exception(f"Connection error on {self.url}")
             else:
                 self.__logger.info(f"Connection error on {self.url}: %s" % str(e))
-            self.__ready = False  # Reset status, avoids picking this instance up
+
+            # Reset status, avoids picking this instance up
+            self.__ready = False
+            self.__ollama_status_response = None
+            self.__model_list_response = None
+            self.__ollama_model_by_id.clear()
 
     async def __maintain_model_keys(self):
         try:
@@ -391,7 +396,7 @@ class OllamaInstanceManager:
         else:
             try:
                 await self.__redis_client.ping()
-            except ConnectionError:
+            except RedisConnectionError:
                 self.__logger.exception("Erreur client redis, on le ferme")
                 self.__redis_client = None
 
