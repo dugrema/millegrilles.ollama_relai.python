@@ -10,6 +10,7 @@ from millegrilles_messages.messages import Constantes
 from millegrilles_messages.bus.PikaChannel import MilleGrillesPikaChannel
 from millegrilles_messages.bus.PikaQueue import MilleGrillesPikaQueueConsumer, RoutingKey
 from millegrilles_messages.messages.MessagesModule import MessageWrapper
+from millegrilles_ollama_relai.OllamaInstanceManager import OllamaInstanceManager, model_name_to_id, OllamaInstance
 from millegrilles_ollama_relai.OllamaManager import OllamaManager
 from millegrilles_ollama_relai import Constantes as OllamaConstants
 
@@ -19,11 +20,15 @@ class MgbusHandler:
     MQ access module
     """
 
-    def __init__(self, manager: OllamaManager):
+    def __init__(self, manager: OllamaManager, ollama_instances: OllamaInstanceManager):
         super().__init__()
         self.__logger = logging.getLogger(__name__+'.'+self.__class__.__name__)
         self.__manager = manager
+        self.__ollama_instances = ollama_instances
         self.__task_group: Optional[TaskGroup] = None
+
+        # Wire message processing callback
+        ollama_instances.set_message_cb(self.__on_ollama_instance_message)
 
     async def run(self):
         self.__logger.debug("MgbusHandler thread started")
@@ -53,9 +58,6 @@ class MgbusHandler:
 
         channel_volatile = create_volatile_q_channel(context, self.__on_volatile_message)
         await self.__manager.context.bus_connector.add_channel(channel_volatile)
-
-        channel_processing = create_processing_q_channel(context, self.__on_processing_message)
-        await self.__manager.context.bus_connector.add_channel(channel_processing)
 
         channel_triggers = create_trigger_q_channel(context, self.__on_processing_trigger)
         await self.__manager.context.bus_connector.add_channel(channel_triggers)
@@ -87,15 +89,34 @@ class MgbusHandler:
         if Constantes.ROLE_USAGER not in roles:
             return {'ok': False, 'code': 403, 'err': 'Acces denied'}
 
-        if action in ['chat']:
-            return await self.__manager.handle_volalile_commands(message)
-        elif action in ['pull', 'ping', 'getModels', 'queryRag']:
-            return await self.__manager.handle_volalile_request(message)
+        if message_type == 'requete':
+            if action == 'ping':
+                ready = self.__ollama_instances.ready
+                return {'ok': ready}
+            elif action == 'getModels':
+                models = self.__ollama_instances.get_models()
+                return {'ok': True, 'models': models}
+            elif action == 'queryRag':
+                return await self.requeue_model_process(message)
+        elif message_type == 'commande':
+            if action == 'chat':
+                return await self.__manager.register_chat(message)
 
         self.__logger.info("__on_volatile_message Ignoring unknown action %s", message.routing_key)
         return {'ok': False, 'code': 404, 'err': 'Unknown operation'}
 
-    async def __on_processing_message(self, message: MessageWrapper):
+    async def requeue_model_process(self, message: MessageWrapper):
+        model = message.parsed['model']
+        model_id = model_name_to_id(model)
+        raise NotImplementedError('TODO')
+
+    async def __on_ollama_instance_message(self, instance: OllamaInstance, message: MessageWrapper):
+        """
+        Called for processing a message from an instance
+        :param processor_id: Unique identifier of this processor (e.g. ollama url, etc.)
+        :param message: Message to process
+        :return:
+        """
         # Authorization check
         enveloppe = message.certificat
         try:
@@ -109,7 +130,7 @@ class MgbusHandler:
         action = message.routage['action']
 
         if action == 'chat':
-            return await self.__manager.process_chat(message)
+            return await self.__manager.process_chat(instance, message)
 
         self.__logger.info("__on_processing_message Ignoring unknown action %s", message.routing_key)
         return {'ok': False, 'code': 404, 'err': 'Unknown operation'}
@@ -166,30 +187,11 @@ def create_volatile_q_channel(context: MilleGrillesBusContext,
     return q_channel
 
 
-def create_processing_q_channel(context: MilleGrillesBusContext,
-                               on_message: Callable[[MessageWrapper], Coroutine[Any, Any, None]]) -> MilleGrillesPikaChannel:
-
-    nom_ou = context.signing_key.enveloppe.subject_organizational_unit_name
-    if nom_ou is None:
-        raise Exception('Invalid certificate - no Organizational Unit (OU) name')
-    queue_name = f'{nom_ou}/processing'
-
-    q_channel = MilleGrillesPikaChannel(context, prefetch_count=1)
-    q_instance = MilleGrillesPikaQueueConsumer(context, on_message, queue_name, arguments={'x-message-ttl': 900_000})
-
-    q_instance.add_routing_key(RoutingKey(
-        Constantes.SECURITE_PROTEGE, f'commande.{OllamaConstants.DOMAIN_OLLAMA_RELAI}.traitement'))
-
-    q_channel.add_queue(q_instance)
-    return q_channel
-
-
 def create_trigger_q_channel(context: MilleGrillesBusContext, on_message: Callable[[MessageWrapper], Coroutine[Any, Any, None]]) -> MilleGrillesPikaChannel:
     # System triggers
     trigger_q_channel = MilleGrillesPikaChannel(context, prefetch_count=1)
     trigger_q = MilleGrillesPikaQueueConsumer(context, on_message, exclusive=True, arguments={'x-message-ttl': 30_000})
     trigger_q_channel.add_queue(trigger_q)
-    # trigger_q.add_routing_key(RoutingKey(Constantes.SECURITE_PUBLIC, f'evenement.ceduleur.{Constantes.EVENEMENT_PING_CEDULE}'))
     trigger_q.add_routing_key(RoutingKey(Constantes.SECURITE_PRIVE, f'commande.{OllamaConstants.DOMAIN_OLLAMA_RELAI}.cancelChat'))
 
     return trigger_q_channel

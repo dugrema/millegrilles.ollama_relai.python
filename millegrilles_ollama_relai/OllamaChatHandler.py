@@ -18,6 +18,7 @@ from millegrilles_ollama_relai.AttachmentHandler import AttachmentHandler
 from millegrilles_ollama_relai.OllamaContext import OllamaContext
 from millegrilles_messages.chiffrage.Mgs4 import chiffrer_mgs4_bytes_secrete
 from millegrilles_messages.chiffrage.DechiffrageUtils import dechiffrer_bytes_secrete, dechiffrer_document_secrete
+from millegrilles_ollama_relai.OllamaInstanceManager import model_name_to_id, OllamaInstance
 from millegrilles_ollama_relai.OllamaTools import OllamaToolHandler
 
 
@@ -50,11 +51,15 @@ class OllamaChatHandler:
         chat_id = message.id
         self.__waiting_ids[chat_id] = {'reply_to': message.reply_to, 'correlation_id': message.correlation_id}
 
-        # Re-emit the message on the traitement Q
+        # Re-emit the message on the model's process Q
+        model = message.parsed['model']
+        model_id = model_name_to_id(model)
+
         attachements = {'correlation_id': message.correlation_id, 'reply_to': message.reply_to}
         attachements.update(message.original['attachements'])
+
         await producer.command(
-            message.original, domain='ollama_relai', action='traitement',
+            message.original, domain='ollama_relai', partition=model_id, action='process',
             exchange=ConstantesMilleGrilles.SECURITE_PROTEGE,
             noformat=True, nowait=True, attachments=attachements)
 
@@ -85,7 +90,7 @@ class OllamaChatHandler:
 
         return {'ok': True, 'message': 'Will be cancelled'}
 
-    async def process_chat(self, message: MessageWrapper):
+    async def process_chat(self, instance: OllamaInstance, message: MessageWrapper):
         chat_id = message.id
         if chat_id in self.__cancelled_chats:
             # Chat has been cancelled, skip it
@@ -211,7 +216,7 @@ class OllamaChatHandler:
             # Run the query. Emit
             done_event = asyncio.Event()
             if action == 'chat':
-                chat_stream = self.ollama_chat(user_profile, chat_messages, chat_model)
+                chat_stream = self.ollama_chat(instance, user_profile, chat_messages, chat_model)
             else:
                 raise Exception('action %s not supported' % action)
 
@@ -371,14 +376,13 @@ class OllamaChatHandler:
 
         return None
 
-    async def ollama_chat(self, user_profile: dict, messages: list[dict], model: str):
-        instance = self.__context.pick_ollama_instance(model)
+    async def ollama_chat(self, instance: OllamaInstance, user_profile: dict, messages: list[dict], model: str):
         client = instance.get_async_client(self.__context.configuration, timeout=180)
         context_len = self.__context.chat_configuration.get('chat_context_length') or 4096
 
         # Check if the model supports tools
         try:
-            model_info = [m for m in self.__context.ollama_models if m['name'] == model][0]
+            model_info = instance.get_model(model)
             if 'tools' in model_info['capabilities']:
                 tools = self.__tool_handler.tools()
             else:

@@ -24,7 +24,8 @@ from millegrilles_messages.messages import Constantes
 
 from millegrilles_messages.messages.MessagesModule import MessageWrapper
 from millegrilles_ollama_relai.AttachmentHandler import AttachmentHandler
-from millegrilles_ollama_relai.OllamaContext import OllamaContext, OllamaInstance
+from millegrilles_ollama_relai.OllamaContext import OllamaContext
+from millegrilles_ollama_relai.OllamaInstanceManager import OllamaInstance
 from millegrilles_ollama_relai.Util import decode_base64_nopad
 
 

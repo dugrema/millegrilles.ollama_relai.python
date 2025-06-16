@@ -4,13 +4,15 @@ from millegrilles_messages.messages.MessagesModule import MessageWrapper
 from millegrilles_ollama_relai.DocumentIndexHandler import DocumentIndexHandler
 from millegrilles_ollama_relai.OllamaChatHandler import OllamaChatHandler
 from millegrilles_ollama_relai.OllamaContext import OllamaContext
+from millegrilles_ollama_relai.OllamaInstanceManager import OllamaInstanceManager
 
 
 class MessageHandler:
 
-    def __init__(self, context: OllamaContext, chat_handler: OllamaChatHandler, document_handler: DocumentIndexHandler):
+    def __init__(self, context: OllamaContext, ollama_instances: OllamaInstanceManager, chat_handler: OllamaChatHandler, document_handler: DocumentIndexHandler):
         self.__logger = logging.getLogger(__name__ + '.' + self.__class__.__name__)
         self.__context = context
+        self.__ollama_instances = ollama_instances
         self.__chat_handler = chat_handler
         self.__document_handler = document_handler
 
@@ -34,10 +36,10 @@ class MessageHandler:
             raise Exception('Domaine must be ollama_relai')
 
         if action == 'ping':
-            available = self.__context.ollama_status
-            return {'ok': available}
+            ready = self.__ollama_instances.ready
+            return {'ok': ready}
         elif action == 'getModels':
-            models = self.__context.ollama_models
+            models = self.__ollama_instances.get_models()
             return {'ok': True, 'models': models}
         elif action == 'queryRag':
             return await self.__document_handler.query_rag(message)

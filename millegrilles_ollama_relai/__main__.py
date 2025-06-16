@@ -13,6 +13,7 @@ from millegrilles_ollama_relai.MgbusHandler import MgbusHandler
 from millegrilles_ollama_relai.OllamaChatHandler import OllamaChatHandler
 from millegrilles_ollama_relai.OllamaConfiguration import OllamaConfiguration
 from millegrilles_ollama_relai.OllamaContext import OllamaContext
+from millegrilles_ollama_relai.OllamaInstanceManager import OllamaInstanceManager
 from millegrilles_ollama_relai.OllamaManager import OllamaManager
 from millegrilles_ollama_relai.MessageHandler import MessageHandler
 from millegrilles_ollama_relai.OllamaTools import OllamaToolHandler
@@ -59,17 +60,17 @@ async def wiring(context: OllamaContext) -> list[Awaitable]:
     # Service instances
     bus_connector = MilleGrillesPikaConnector(context)
     context.bus_connector = bus_connector
+    ollama_instances = OllamaInstanceManager(context)
     attachment_handler = AttachmentHandler(context)
     tool_handler = OllamaToolHandler(context, attachment_handler)
     chat_handler = OllamaChatHandler(context, attachment_handler, tool_handler)
     document_handler = DocumentIndexHandler(context, attachment_handler)
-    query_handler = MessageHandler(context, chat_handler, document_handler)
 
     # Facade
-    manager = OllamaManager(context, query_handler, attachment_handler, tool_handler, chat_handler, document_handler)
+    manager = OllamaManager(context, ollama_instances, attachment_handler, tool_handler, chat_handler, document_handler)
 
     # Access modules
-    bus_handler = MgbusHandler(manager)
+    bus_handler = MgbusHandler(manager, ollama_instances)
 
     # Setup, injecting additional dependencies
     await manager.setup()  # Create folders for other modules
@@ -79,7 +80,7 @@ async def wiring(context: OllamaContext) -> list[Awaitable]:
     # Create tasks
     coros = [
         context.run(),
-        query_handler.run(),
+        ollama_instances.run(),
         manager.run(),
         bus_handler.run(),
         tool_handler.run(),

@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import pathlib
-import httpx
 
 from asyncio import TaskGroup
 from typing import Callable, Awaitable, Optional
@@ -14,17 +13,18 @@ from millegrilles_ollama_relai.AttachmentHandler import AttachmentHandler
 from millegrilles_ollama_relai.DocumentIndexHandler import DocumentIndexHandler
 from millegrilles_ollama_relai.OllamaChatHandler import OllamaChatHandler
 from millegrilles_ollama_relai.OllamaContext import OllamaContext, RagConfiguration
-from millegrilles_ollama_relai.MessageHandler import MessageHandler
+from millegrilles_ollama_relai.OllamaInstanceManager import OllamaInstanceManager, OllamaInstance
 from millegrilles_ollama_relai.OllamaTools import OllamaToolHandler
 
 
 class OllamaManager:
 
-    def __init__(self, context: OllamaContext, query_handler: MessageHandler, attachment_handler: AttachmentHandler,
-                 tool_handler: OllamaToolHandler, chat_handler: OllamaChatHandler, document_handler: DocumentIndexHandler):
+    def __init__(self, context: OllamaContext, ollama_instances: OllamaInstanceManager,
+                 attachment_handler: AttachmentHandler, tool_handler: OllamaToolHandler, chat_handler: OllamaChatHandler,
+                 document_handler: DocumentIndexHandler):
         self.__logger = logging.getLogger(__name__+'.'+self.__class__.__name__)
         self.__context = context
-        self.__query_handler = query_handler
+        self.__ollama_instances = ollama_instances
         self.__attachment_handler = attachment_handler
         self.__tool_handler = tool_handler
         self.__chat_handler = chat_handler
@@ -34,6 +34,7 @@ class OllamaManager:
 
         self.__load_ai_configuration_event = asyncio.Event()
         self.__load_filehost_event = asyncio.Event()
+        self.__ollama_available = False
 
     @property
     def context(self):
@@ -126,14 +127,17 @@ class OllamaManager:
 
         self.__logger.info("__reload_ai_configuration_thread Stopping")
 
-    async def handle_volalile_request(self, message: MessageWrapper):
-        return await self.__query_handler.handle_requests(message)
+    # async def handle_volalile_request(self, message: MessageWrapper):
+    #     return await self.__message_handler.handle_requests(message)
 
-    async def handle_volalile_commands(self, message: MessageWrapper):
-        return await self.__query_handler.handle_commands(message)
+    # async def handle_volalile_commands(self, message: MessageWrapper):
+    #     return await self.__message_handler.handle_commands(message)
 
-    async def process_chat(self, message: MessageWrapper):
-        return await self.__chat_handler.process_chat(message)
+    async def register_chat(self, message: MessageWrapper):
+        return await self.__chat_handler.register_query(message)
+
+    async def process_chat(self, instance: OllamaInstance, message: MessageWrapper):
+        return await self.__chat_handler.process_chat(instance, message)
 
     async def cancel_chat(self, message: MessageWrapper):
         return await self.__chat_handler.cancel_chat(message)
@@ -158,7 +162,7 @@ class OllamaManager:
         except (TypeError, KeyError):
             pass  # No URL information
         else:
-            self.__context.update_instance_list(urls)
+            self.__ollama_instances.update_instance_list(urls)
 
         try:
             rag_configuration: RagConfiguration = parsed['rag']
@@ -178,17 +182,17 @@ class OllamaManager:
             except asyncio.TimeoutError:
                 continue  # Retry
 
-            available = self.__context.ollama_status is not False
-            await self.__check_ollama_status()
-            now_available = self.__context.ollama_status is not False
-
-            if available != now_available:
-                self.__logger.info("ollama Status now %s" % now_available)
-                producer = await self.__context.get_producer()
-                status_event = {'event_type': 'availability', 'available': now_available}
-                await producer.event(
-                    status_event, 'ollama_relai', 'status',
-                    exchange=Constantes.SECURITE_PRIVE)
+            # # available = self.__ollama_instances.ollama_status is not False
+            # # await self.__check_ollama_status()
+            # now_available = self.__ollama_instances.ollama_ready is not False
+            # if self.__ollama_available != now_available:
+            #     self.__ollama_available = now_available  # Toggle local flag for next check
+            #     self.__logger.info("ollama Status now %s" % now_available)
+            #     producer = await self.__context.get_producer()
+            #     status_event = {'event_type': 'availability', 'available': now_available}
+            #     await producer.event(
+            #         status_event, 'ollama_relai', 'status',
+            #         exchange=Constantes.SECURITE_PRIVE)
 
             try:
                 await self.__context.wait(10)
@@ -197,51 +201,51 @@ class OllamaManager:
 
         self.__logger.info("__ollama_watchdog_thread Stopping")
 
-    async def __check_ollama_status(self):
-        instances = self.__context.ollama_instances
-
-        models = set()
-        for instance in instances:
-            self.__logger.debug(f"Checking with {instance.url}")
-            client = instance.get_async_client(self.context.configuration)
-            status = False
-            try:
-                # Test connection by getting currently loaded model information
-                async with instance.semaphore:
-                    instance.ollama_status = await client.ps()
-                    instance.ollama_models = await client.list()
-                    for model in instance.ollama_models.models:
-                        try:
-                            self.context.ollama_model_params[model.model]
-                        except KeyError:
-                            params = dict()
-                            model_info = await client.show(model.model)
-                            params['capabilities'] = model_info.capabilities
-                            self.context.ollama_model_params[model.model] = params
-
-                    instance_models = [m.model for m in instance.ollama_models.models]
-                    models.update(instance_models)
-                    status = True
-                    self.__logger.debug(f"Connection OK: {instance.url}")
-            except (httpx.ConnectError, ConnectionError) as e:
-                # Failed to connect
-                if self.__logger.isEnabledFor(logging.DEBUG):
-                    self.__logger.exception(f"Connection error on {instance.url}")
-                else:
-                   self.__logger.info(f"Connection error on {instance.url}: %s" % str(e))
-                instance.status = None  # Reset status, avoids picking this instance up
-
-            # Indicates at least one instance is responsive
-            self.__context.ollama_status = status
-            ollama_models = list()
-            for m in models:
-                model_info = {'name': m}
-                try:
-                    params = self.__context.ollama_model_params[m]
-                    model_info.update(params)
-                except KeyError:
-                    pass
-                ollama_models.append(model_info)
-
-            # self.__context.ollama_models = [{'name': m} for m in models]
-            self.__context.ollama_models = ollama_models
+    # async def __check_ollama_status(self):
+    #     instances = self.__ollama_instances.ollama_instances
+    #
+    #     models = set()
+    #     for instance in instances:
+    #         self.__logger.debug(f"Checking with {instance.url}")
+    #         client = instance.get_async_client(self.context.configuration)
+    #         status = False
+    #         try:
+    #             # Test connection by getting currently loaded model information
+    #             async with instance.semaphore:
+    #                 instance.ollama_status = await client.ps()
+    #                 instance.ollama_models = await client.list()
+    #                 for model in instance.ollama_models.models:
+    #                     try:
+    #                         self.__ollama_instances.ollama_model_params[model.model]
+    #                     except KeyError:
+    #                         params = dict()
+    #                         model_info = await client.show(model.model)
+    #                         params['capabilities'] = model_info.capabilities
+    #                         self.__ollama_instances.ollama_model_params[model.model] = params
+    #
+    #                 instance_models = [m.model for m in instance.ollama_models.models]
+    #                 models.update(instance_models)
+    #                 status = True
+    #                 self.__logger.debug(f"Connection OK: {instance.url}")
+    #         except (httpx.ConnectError, ConnectionError) as e:
+    #             # Failed to connect
+    #             if self.__logger.isEnabledFor(logging.DEBUG):
+    #                 self.__logger.exception(f"Connection error on {instance.url}")
+    #             else:
+    #                self.__logger.info(f"Connection error on {instance.url}: %s" % str(e))
+    #             instance.status = None  # Reset status, avoids picking this instance up
+    #
+    #         # Indicates at least one instance is responsive
+    #         self.__context.ollama_status = status
+    #         ollama_models = list()
+    #         for m in models:
+    #             model_info = {'name': m}
+    #             try:
+    #                 params = self.__ollama_instances.ollama_model_params[m]
+    #                 model_info.update(params)
+    #             except KeyError:
+    #                 pass
+    #             ollama_models.append(model_info)
+    #
+    #         # self.__context.ollama_models = [{'name': m} for m in models]
+    #         self.__context.ollama_models = ollama_models

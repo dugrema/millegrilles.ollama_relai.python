@@ -5,8 +5,7 @@ import logging
 import ssl
 import pathlib
 
-from ollama import AsyncClient, ProcessResponse, ListResponse
-from typing import Optional, Any, TypedDict
+from typing import Optional, TypedDict
 from urllib.parse import urlparse
 
 from millegrilles_messages.bus.BusContext import MilleGrillesBusContext
@@ -15,33 +14,6 @@ from millegrilles_messages.structs.Filehost import Filehost
 from millegrilles_ollama_relai.OllamaConfiguration import OllamaConfiguration
 
 LOGGER = logging.getLogger(__name__)
-
-class OllamaInstance:
-
-    def __init__(self, url: str):
-        self.url = url
-        self.ollama_status: Optional[ProcessResponse] = None
-        self.ollama_models: Optional[ListResponse] = None
-        self.semaphore = asyncio.BoundedSemaphore(1)
-
-    def is_available(self) -> bool:
-        """ @:returns True when instance is not locked (available immediately) """
-        return not self.semaphore.locked()
-
-    def get_client_options(self, configuration: OllamaConfiguration) -> dict:
-        connection_url = self.url
-        if connection_url.lower().startswith('https://'):
-            # Use a millegrille certificate authentication
-            cert = (configuration.cert_path, configuration.key_path)
-            params = {'host':connection_url, 'verify':configuration.ca_path, 'cert':cert}
-        else:
-            params = {'host':connection_url}
-        return params
-
-    def get_async_client(self, configuration: OllamaConfiguration, timeout=None) -> AsyncClient:
-        options = self.get_client_options(configuration)
-        return AsyncClient(timeout=timeout, **options)
-
 
 class ChatConfiguration(TypedDict):
     default_model: Optional[str]
@@ -61,19 +33,11 @@ class OllamaContext(MilleGrillesBusContext):
         super().__init__(configuration)
         self.__logger = logging.getLogger(__name__ + '.' + self.__class__.__name__)
         self.__bus_connector: Optional[MilleGrillesPikaConnector] = None
-
         self.__filehost: Optional[Filehost] = None
         self.__filehost_url: Optional[str] = None
         self.__tls_method: Optional[str] = None
         self.__ssl_context_filehost: Optional[ssl.SSLContext] = None
-        # Semaphore to only allow 1 http request at a time to the Ollama backend
 
-        self.__instances: list[OllamaInstance] = list()
-        self.ollama_status: bool = False
-        self.ollama_models: Optional[list[Any]] = None
-        self.ollama_model_params: dict[str, dict] = dict()
-
-        # self.__ollama_http_semaphore = asyncio.BoundedSemaphore(1)
         self.ai_configuration_loaded = asyncio.Event()
         self.rag_configuration: Optional[RagConfiguration] = None
         self.chat_configuration: Optional[ChatConfiguration] = None
@@ -114,10 +78,6 @@ class OllamaContext(MilleGrillesBusContext):
     def tls_method(self):
         return self.__tls_method
 
-    @property
-    def ollama_instances(self) -> list[OllamaInstance]:
-        return self.__instances
-
     def get_tcp_connector(self) -> aiohttp.TCPConnector:
         # Prepare connection information (SSL)
         ssl_context = None
@@ -146,46 +106,3 @@ class OllamaContext(MilleGrillesBusContext):
         else:
             raise ValueError("No valid URL")
         return url, tls_method
-
-    def pick_ollama_instance(self, model: Optional[str] = None) -> OllamaInstance:
-        if model:
-            matching_instances = list()
-            for instance in self.__instances:
-                # Make sure the instance is available
-                if instance.ollama_status is not None:
-                    # Extract a list of models to check if any match the currently requested model
-                    models = [m.model for m in instance.ollama_models.models]
-                    if model in models:
-                        matching_instances.append(instance)
-        else:
-            matching_instances = [i for i in self.__instances if i.ollama_status is not None]
-
-        for instance in matching_instances:
-            if instance.is_available():
-                return instance
-
-        # No instance currently free, just return the first matching instance. Implement round-robin later.
-        return matching_instances[0]
-
-    def update_instance_list(self, urls: list[str]):
-        url_set = set(urls)
-
-        to_remove = set()
-        for instance in self.__instances:
-            try:
-                url_set.remove(instance.url)
-                self.__logger.debug(f"URL {instance.url} kept")
-            except KeyError:
-                # This instance has been removed
-                to_remove.add(instance.url)
-                self.__logger.debug(f"URL {instance.url} removed")
-
-        # Remove instances that are no longer required
-        updated_list = [i for i in self.__instances if i.url not in to_remove]
-
-        # Add missing instances
-        for url in url_set:
-            updated_list.append(OllamaInstance(url))
-            self.__logger.debug(f"URL {url} added")
-
-        self.__instances = updated_list
