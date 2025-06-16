@@ -1,11 +1,11 @@
 import asyncio
-import binascii
 import datetime
 
 import httpx
 import logging
 
-from cryptography.x509 import ExtensionNotFound
+import redis.asyncio as redis
+from redis.exceptions import ConnectionError
 from ollama import AsyncClient, ProcessResponse, ListResponse, ShowResponse
 from typing import Optional, Any, Coroutine, Callable, Awaitable
 
@@ -209,6 +209,7 @@ class OllamaInstanceManager:
         # Cache of all queries that have started processing for which the message is not yet expired
         # Used to deduplicate query processing across multiple instances.
         self.__query_dedupe_memory: dict[str, dict] = dict()
+        self.__redis_client: Optional[redis.Redis] = None
 
     @property
     def ready(self) -> bool:
@@ -232,6 +233,8 @@ class OllamaInstanceManager:
             instance.stop()
 
     async def run(self):
+
+        await self.__connect_redis()
 
         # Check that wiring is complete
         if self.__message_cb is None:
@@ -335,7 +338,17 @@ class OllamaInstanceManager:
 
             await self.__context.wait(180)
 
-    def claim_query(self, query_id: str):
+    async def claim_query(self, query_id: str):
+        # Try to use redis first
+        if self.__redis_client:
+            query_key = f'ollama.query.{query_id}'
+            result = await self.__redis_client.set(query_key, '', nx=True, ex=900)
+            if result is not True:
+                raise Exception('Already processing')
+            await self.__redis_client.expire(query_key, 900)  # Expire when all messages in MQ expire (Q TTL)
+            return None
+
+        # Fallback with local memory locks
         try:
             _info = self.__query_dedupe_memory[query_id]  # KeyError if not present
             raise Exception('Already processing')
@@ -357,6 +370,30 @@ class OllamaInstanceManager:
             return instances[0]
         except IndexError:
             return None
+
+    async def __connect_redis(self):
+        if self.__redis_client is None:
+            ca_pem = '\n'.join(self.__context.ca.chaine_pem())
+            configuration = self.__context.configuration
+            with open(configuration.redis_password_path) as file:
+                password = file.read().strip()
+
+            client = redis.Redis(host=configuration.redis_hostname, port=configuration.redis_port,
+                                 username=configuration.redis_username,
+                                 password=password,
+                                 ssl=True,
+                                 ssl_keyfile=configuration.key_path,
+                                 ssl_certfile=configuration.cert_path,
+                                 ssl_ca_data=ca_pem)
+
+            await client.ping()
+            self.__redis_client = client
+        else:
+            try:
+                await self.__redis_client.ping()
+            except ConnectionError:
+                self.__logger.exception("Erreur client redis, on le ferme")
+                self.__redis_client = None
 
 async def create_instance_channel(context: OllamaContext,
                                   instance_id: str,
