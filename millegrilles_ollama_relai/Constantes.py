@@ -3,3 +3,5 @@ ENV_DIR_AI_RAG = 'DIR_RAG'
 
 DEFAULT_OLLAMA_URL = 'http://ollama:11434'
 DOMAIN_OLLAMA_RELAI = 'ollama_relai'
+
+REDIS_SESSIONS_DB = 2

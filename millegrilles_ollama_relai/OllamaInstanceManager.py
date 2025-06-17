@@ -205,8 +205,6 @@ class OllamaInstanceManager:
         self.__status_event = asyncio.Event()
         self.__instances: list[OllamaInstance] = list()
         self.__ollama_ready: bool = False
-        # self.ollama_models: Optional[list[Any]] = None
-        # self.ollama_model_params: dict[str, dict] = dict()
 
         self.__group: Optional[asyncio.TaskGroup] = None
         self.__message_cb: Optional[Callable[[str, MessageWrapper], Awaitable[Optional[dict]]]] = None
@@ -249,6 +247,7 @@ class OllamaInstanceManager:
             self.__group = group
             group.create_task(self.__status_thread())
             group.create_task(self.__query_cache_maintenance_thread())
+            group.create_task(self.__maintain_redis())
             group.create_task(self.__stop_thread())
 
         # Cleanup
@@ -350,7 +349,7 @@ class OllamaInstanceManager:
             result = await self.__redis_client.set(query_key, '', nx=True, ex=900)
             if result is not True:
                 raise Exception('Already processing')
-            await self.__redis_client.expire(query_key, 900)  # Expire when all messages in MQ expire (Q TTL)
+            # await self.__redis_client.expire(query_key, 900)  # Expire when all messages in MQ expire (Q TTL)
             return None
 
         # Fallback with local memory locks
@@ -376,29 +375,39 @@ class OllamaInstanceManager:
         except IndexError:
             return None
 
+    async def __maintain_redis(self):
+        while self.__context.stopping is False:
+            await self.__connect_redis()
+            await self.__context.wait(60)
+
     async def __connect_redis(self):
-        if self.__redis_client is None:
-            ca_pem = '\n'.join(self.__context.ca.chaine_pem())
-            configuration = self.__context.configuration
-            with open(configuration.redis_password_path) as file:
-                password = file.read().strip()
+        try:
+            client = self.__redis_client
+            if client is None:
+                ca_pem = '\n'.join(self.__context.ca.chaine_pem())
+                configuration = self.__context.configuration
+                with open(configuration.redis_password_path) as file:
+                    password = file.read().strip()
 
-            client = redis.Redis(host=configuration.redis_hostname, port=configuration.redis_port,
-                                 username=configuration.redis_username,
-                                 password=password,
-                                 ssl=True,
-                                 ssl_keyfile=configuration.key_path,
-                                 ssl_certfile=configuration.cert_path,
-                                 ssl_ca_data=ca_pem)
+                client = redis.Redis(host=configuration.redis_hostname, port=configuration.redis_port,
+                                     username=configuration.redis_username,
+                                     password=password,
+                                     ssl=True,
+                                     ssl_keyfile=configuration.key_path,
+                                     ssl_certfile=configuration.cert_path,
+                                     ssl_ca_data=ca_pem)
 
-            await client.ping()
+                await client.select(OllamaConstants.REDIS_SESSIONS_DB)
+            else:
+                # Test connection
+                await client.ping()
+
             self.__redis_client = client
-        else:
-            try:
-                await self.__redis_client.ping()
-            except RedisConnectionError:
-                self.__logger.exception("Erreur client redis, on le ferme")
-                self.__redis_client = None
+            self.__logger.debug("Connection to redis OK")
+        except RedisConnectionError:
+            self.__redis_client = None
+            self.__logger.error("Redis connection error, closing")
+
 
 async def create_instance_channel(context: OllamaContext,
                                   instance_id: str,

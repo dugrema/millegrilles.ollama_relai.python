@@ -15,7 +15,6 @@ from millegrilles_ollama_relai.OllamaConfiguration import OllamaConfiguration
 from millegrilles_ollama_relai.OllamaContext import OllamaContext
 from millegrilles_ollama_relai.OllamaInstanceManager import OllamaInstanceManager
 from millegrilles_ollama_relai.OllamaManager import OllamaManager
-from millegrilles_ollama_relai.MessageHandler import MessageHandler
 from millegrilles_ollama_relai.OllamaTools import OllamaToolHandler
 
 LOGGER = logging.getLogger(__name__)

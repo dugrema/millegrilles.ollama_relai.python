@@ -108,7 +108,7 @@ class MgbusHandler:
     async def __on_ollama_instance_message(self, instance: OllamaInstance, message: MessageWrapper):
         """
         Called for processing a message from an instance
-        :param processor_id: Unique identifier of this processor (e.g. ollama url, etc.)
+        :param instance: Instance that received the message from its own work queue.
         :param message: Message to process
         :return:
         """
@@ -124,8 +124,8 @@ class MgbusHandler:
 
         action = message.routage['action']
 
-        # Dedupe messages received on queues with same models
-        # All ollama instances are registered for all their models. A processing message goes to all supporting queues at
+        # Dedupe messages received on instance work queues with same models
+        # Ollama instances are registered for all their models. A processing message goes to all supporting queues at
         # the same time. This is used to ensure only one ollama instance is allowed to process the same message by id.
         message_id = message.id
         try:
