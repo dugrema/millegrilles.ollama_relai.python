@@ -140,6 +140,14 @@ class OllamaManager:
         return await self.__chat_handler.process_chat(instance, message)
 
     async def cancel_chat(self, message: MessageWrapper):
+        try:
+            # Block processing from redis
+            chat_id = message.parsed['chat_id']
+            await self.__ollama_instances.claim_query(chat_id)
+        except Exception:
+            pass  # Already locked (processing)
+
+        # Cancel the chat when already processing - this also puts a lock in memory in case redis is not available
         return await self.__chat_handler.cancel_chat(message)
 
     async def register_rag_query(self, message):
@@ -168,7 +176,7 @@ class OllamaManager:
         except (TypeError, KeyError):
             pass  # No URL information
         else:
-            self.__ollama_instances.update_instance_list(urls)
+            await self.__ollama_instances.update_instance_list(urls)
 
         try:
             rag_configuration: RagConfiguration = parsed['rag']

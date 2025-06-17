@@ -20,6 +20,8 @@ from millegrilles_ollama_relai.OllamaContext import OllamaContext
 
 LOGGER = logging.getLogger(__name__)
 
+CONST_OLLAMA_LEASE_DURATION = 20
+
 class OllamaModelParams:
 
     def __init__(self, id: str, model: ListResponse.Model, show_response: ShowResponse):
@@ -34,11 +36,13 @@ class OllamaModelParams:
 
 class OllamaInstance:
 
-    def __init__(self, context: OllamaContext, url: str, message_cb: Callable[[Any, MessageWrapper], Awaitable[Optional[dict]]],
+    def __init__(self, context: OllamaContext, url: str, update_lease_cb: Callable[[str], Awaitable[bool]],
+                 message_cb: Callable[[Any, MessageWrapper], Awaitable[Optional[dict]]],
                  status_cb: Callable[[bool], Coroutine[Any, Any, None]]):
         self.__logger = logging.getLogger(__name__ + '.' + self.__class__.__name__)
         self.__context = context
         self.__message_cb = message_cb
+        self.__update_lease_cb = update_lease_cb
         self.url = url
         self.__status_cb = status_cb    # Callback at the end of maintenance, passes in value of ready
 
@@ -65,13 +69,17 @@ class OllamaInstance:
         # Create channel with queue consumer
         await self.__create_channel()
 
-        while not self.__stop_event.is_set():
-            await self.__maintain()
-            try:
-                await asyncio.wait_for(self.__stop_event.wait(), 20)
-                break  # Stopping
-            except asyncio.TimeoutError:
-                pass
+        async with asyncio.TaskGroup() as group:
+            group.create_task(self.__refresh_thread())
+            group.create_task(self.__lease_thread())
+
+        # while not self.__stop_event.is_set():
+        #     await self.__maintain()
+        #     try:
+        #         await asyncio.wait_for(self.__stop_event.wait(), 20)
+        #         break  # Stopping
+        #     except asyncio.TimeoutError:
+        #         pass
 
         self.__logger.info(f"Stopping ollama instance thread for {self.url}")
 
@@ -84,6 +92,24 @@ class OllamaInstance:
         finally:
             # Shutting down
             await self.__status_cb(False)
+
+    async def __lease_thread(self):
+        while not self.__stop_event.is_set():
+            await self.__update_lease_cb(self.url)
+            try:
+                await asyncio.wait_for(self.__stop_event.wait(), CONST_OLLAMA_LEASE_DURATION - 5)
+                break  # Stopping
+            except asyncio.TimeoutError:
+                pass
+
+    async def __refresh_thread(self):
+        while not self.__stop_event.is_set():
+            await self.__maintain()
+            try:
+                await asyncio.wait_for(self.__stop_event.wait(), 20)
+                break  # Stopping
+            except asyncio.TimeoutError:
+                pass
 
     async def __maintain(self):
         # Fetch status, models from ollama instance server
@@ -203,6 +229,7 @@ class OllamaInstanceManager:
         self.__context = context
 
         self.__status_event = asyncio.Event()
+        self.__ollama_instance_urls: Optional[list[str]] = None
         self.__instances: list[OllamaInstance] = list()
         self.__ollama_ready: bool = False
 
@@ -245,15 +272,27 @@ class OllamaInstanceManager:
 
         async with asyncio.TaskGroup() as group:
             self.__group = group
+            group.create_task(self.__maintain_instance_list_thread())
             group.create_task(self.__status_thread())
             group.create_task(self.__query_cache_maintenance_thread())
             group.create_task(self.__maintain_redis())
             group.create_task(self.__stop_thread())
 
-        # Cleanup
+        # Cleanup. Expire locks
+        for instance in self.__instances:
+            await self.__expire_instance_lock(instance.url)
         self.__group = None
 
-    def update_instance_list(self, urls: list[str]):
+    async def __maintain_instance_list_thread(self):
+        await self.__context.ai_configuration_loaded.wait()
+        while not self.__context.stopping:
+            urls = self.__ollama_instance_urls
+            if urls:
+                await self.update_instance_list(urls)
+            await self.__context.wait(30)
+
+    async def update_instance_list(self, urls: list[str]):
+        self.__ollama_instance_urls = urls
         url_set = set(urls)
 
         to_remove = set()
@@ -269,15 +308,45 @@ class OllamaInstanceManager:
 
         # Remove instances that are no longer required
         updated_list = [i for i in self.__instances if i.url not in to_remove]
+        for instance_url in to_remove:
+            await self.__expire_instance_lock(instance_url)
 
         # Add missing instances
         for url in url_set:
-            instance = OllamaInstance(self.__context, url, self.__message_cb, self.__model_update_cb)
-            updated_list.append(instance)
-            self.__group.create_task(instance.run())
-            self.__logger.debug(f"URL {url} added")
+            # Lock the ollama instance by url - avoids running the same instance from multiple relays
+            available = await self.__lease_instance(url, True)
+            if available:
+                instance = OllamaInstance(self.__context, url, self.__lease_instance, self.__message_cb, self.__model_update_cb)
+                updated_list.append(instance)
+                self.__group.create_task(instance.run())
+                self.__logger.debug(f"URL {url} added")
+            else:
+                self.__logger.debug(f"URL {url} already locked")
 
         self.__instances = updated_list
+
+    async def __expire_instance_lock(self, url: str):
+        url_key = url.replace('/', '_').replace(':', '_')
+        await self.__redis_client.expire(f'ollama.{url_key}', 0)
+
+    async def __lease_instance(self, url: str, initial=False) -> bool:
+        """
+        :param url: Url of the ollama instance
+        :param initial: True if this is for the initial lock.
+        :return: True if lock acquired.
+        """
+        url_key = url.replace('/', '_').replace(':', '_')
+        result = await self.__redis_client.set(f'ollama.{url_key}', '', nx=initial, ex=CONST_OLLAMA_LEASE_DURATION)
+        return result is True
+
+    # async def keep_instance_lease_alive(self, url: str):
+    #     """
+    #     Update the instance url lock with ttl of 20 seconds
+    #     :param url:
+    #     :return:
+    #     """
+    #     url_key = url.replace('/', '_').replace(':', '_')
+    #     await self.__redis_client.set(f'ollama.{url_key}', '', ex=CONST_OLLAMA_LEASE_DURATION)
 
     async def __model_update_cb(self, ready: bool):
         """
