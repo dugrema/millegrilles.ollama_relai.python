@@ -181,15 +181,27 @@ class DocumentIndexHandler:
     async def __query_thread(self):
         while self.__context.stopping is False:
             self.__event_fetch_jobs.clear()
-            if self.__intake_queue.qsize() < 2:
-                # Try to fetch more items
-                self.__logger.debug("Triggering fetch of new batch of files for RAG (low/empty intake queue)")
+
+            if self.__intake_queue.qsize() == 0:
                 try:
-                    await self.__query_batch_rag()
-                except asyncio.TimeoutError:
-                    self.__logger.warning("Timeout querying for files to index")
-                except (AttributeError, KeyError, ValueError) as e:
-                    self.__logger.warning("Error loading file or filehost configuration: %s" % e)
+                    # Ensure that the RAG model is available locally
+                    rag_configuration = self.__context.rag_configuration
+                    embedding_model = rag_configuration['model_embedding_name']
+                    instance = self.__ollama_instances.pick_instance_for_model(embedding_model)
+                except (TypeError, KeyError) as e:
+                    self.__logger.debug(f"RAG configuration not initialized yet: {e}")
+                else:
+                    if instance is not None:
+                        # Try to fetch more items
+                        self.__logger.debug("Triggering fetch of new batch of files for RAG (low/empty intake queue)")
+                        try:
+                            await self.__query_batch_rag()
+                        except asyncio.TimeoutError:
+                            self.__logger.warning("Timeout querying for files to index")
+                        except (AttributeError, KeyError, ValueError) as e:
+                            self.__logger.warning("Error loading file or filehost configuration: %s" % e)
+                    else:
+                        self.__logger.info(f"RAG embedding model {embedding_model} not available locally, will retry later")
 
             await self.__event_fetch_jobs.wait()
 
