@@ -23,7 +23,7 @@ from millegrilles_messages.chiffrage.DechiffrageUtils import dechiffrer_document
 from millegrilles_messages.messages import Constantes
 
 from millegrilles_messages.messages.MessagesModule import MessageWrapper
-from millegrilles_ollama_relai.AttachmentHandler import AttachmentHandler
+from millegrilles_messages.Filehost import FilehostConnection
 from millegrilles_ollama_relai.OllamaContext import OllamaContext
 from millegrilles_ollama_relai.OllamaInstanceManager import OllamaInstance, model_name_to_id, OllamaInstanceManager
 from millegrilles_ollama_relai.Util import decode_base64_nopad
@@ -50,7 +50,7 @@ QUERY_BATCH_RAG_LEN = 30
 
 class DocumentIndexHandler:
 
-    def __init__(self, context: OllamaContext, ollama_instances: OllamaInstanceManager, attachment_handler: AttachmentHandler):
+    def __init__(self, context: OllamaContext, ollama_instances: OllamaInstanceManager, attachment_handler: FilehostConnection):
         self.__logger = logging.getLogger(__name__ + '.' + self.__class__.__name__)
         self.__context = context
         self.__ollama_instances = ollama_instances

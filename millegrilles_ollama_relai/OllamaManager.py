@@ -9,7 +9,7 @@ from millegrilles_messages.bus.BusContext import ForceTerminateExecution
 from millegrilles_messages.messages import Constantes
 from millegrilles_messages.messages.MessagesModule import MessageWrapper
 from millegrilles_messages.structs.Filehost import Filehost
-from millegrilles_ollama_relai.AttachmentHandler import AttachmentHandler
+from millegrilles_messages.Filehost import FilehostConnection
 from millegrilles_ollama_relai.DocumentIndexHandler import DocumentIndexHandler
 from millegrilles_ollama_relai.OllamaChatHandler import OllamaChatHandler
 from millegrilles_ollama_relai.OllamaContext import OllamaContext, RagConfiguration
@@ -20,7 +20,7 @@ from millegrilles_ollama_relai.OllamaTools import OllamaToolHandler
 class OllamaManager:
 
     def __init__(self, context: OllamaContext, ollama_instances: OllamaInstanceManager,
-                 attachment_handler: AttachmentHandler, tool_handler: OllamaToolHandler, chat_handler: OllamaChatHandler,
+                 attachment_handler: FilehostConnection, tool_handler: OllamaToolHandler, chat_handler: OllamaChatHandler,
                  document_handler: DocumentIndexHandler):
         self.__logger = logging.getLogger(__name__+'.'+self.__class__.__name__)
         self.__context = context

@@ -1,13 +1,13 @@
 import logging
 
-from millegrilles_ollama_relai.AttachmentHandler import AttachmentHandler
+from millegrilles_messages.Filehost import FilehostConnection
 from millegrilles_ollama_relai.OllamaContext import OllamaContext
 from millegrilles_ollama_relai.OllamaToolsTime import ToolTime
 from millegrilles_ollama_relai.ToolStructs import OllamaTool
 
 class OllamaToolHandler:
 
-    def __init__(self, context: OllamaContext, attachment_handler: AttachmentHandler):
+    def __init__(self, context: OllamaContext, attachment_handler: FilehostConnection):
         self.__logger = logging.getLogger(__name__ + '.' + self.__class__.__name__)
         self.__context = context
         self.__attachment_handler = attachment_handler

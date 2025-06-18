@@ -7,7 +7,7 @@ from typing import Awaitable
 
 from millegrilles_messages.bus.BusContext import ForceTerminateExecution, StopListener
 from millegrilles_messages.bus.PikaConnector import MilleGrillesPikaConnector
-from millegrilles_ollama_relai.AttachmentHandler import AttachmentHandler
+from millegrilles_messages.Filehost import FilehostConnection
 from millegrilles_ollama_relai.DocumentIndexHandler import DocumentIndexHandler
 from millegrilles_ollama_relai.MgbusHandler import MgbusHandler
 from millegrilles_ollama_relai.OllamaChatHandler import OllamaChatHandler
@@ -60,7 +60,7 @@ async def wiring(context: OllamaContext) -> list[Awaitable]:
     bus_connector = MilleGrillesPikaConnector(context)
     context.bus_connector = bus_connector
     ollama_instances = OllamaInstanceManager(context)
-    attachment_handler = AttachmentHandler(context)
+    attachment_handler = FilehostConnection(context)
     tool_handler = OllamaToolHandler(context, attachment_handler)
     chat_handler = OllamaChatHandler(context, attachment_handler, tool_handler)
     document_handler = DocumentIndexHandler(context, ollama_instances, attachment_handler)
