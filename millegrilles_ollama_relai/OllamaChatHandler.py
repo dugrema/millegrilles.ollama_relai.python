@@ -10,11 +10,14 @@ import tempfile
 import subprocess
 import os
 
-from typing import Optional
+from typing import Optional, AsyncGenerator, Any
+
+from ollama import ChatResponse
 
 from millegrilles_messages.messages import Constantes as ConstantesMilleGrilles
+from millegrilles_messages.messages.EnveloppeCertificat import EnveloppeCertificat
 from millegrilles_messages.messages.MessagesModule import MessageWrapper
-from millegrilles_ollama_relai.AttachmentHandler import AttachmentHandler
+from millegrilles_messages.Filehost import FilehostConnection
 from millegrilles_ollama_relai.OllamaContext import OllamaContext
 from millegrilles_messages.chiffrage.Mgs4 import chiffrer_mgs4_bytes_secrete
 from millegrilles_messages.chiffrage.DechiffrageUtils import dechiffrer_bytes_secrete, dechiffrer_document_secrete
@@ -26,7 +29,7 @@ MAX_TOOL_ITERATIONS = 4
 
 class OllamaChatHandler:
 
-    def __init__(self, context: OllamaContext, attachment_handler: AttachmentHandler, tool_handler: OllamaToolHandler):
+    def __init__(self, context: OllamaContext, attachment_handler: FilehostConnection, tool_handler: OllamaToolHandler):
         self.__logger = logging.getLogger(__name__ + '.' + self.__class__.__name__)
         self.__context = context
         self.__attachment_handler = attachment_handler
@@ -133,6 +136,11 @@ class OllamaChatHandler:
             conversation_id = content['conversation_id']
             user_profile = content.get('user_profile') or dict()
 
+            try:
+                model_capabilities = instance.get_model(chat_model).capabilities
+            except (KeyError, AttributeError):
+                model_capabilities = list()  # Not capabilities for this model
+
             # Recover the keys, send to MaitreDesCles to get the decrypted value
             dechiffrage = {'signature': domain_signature, 'cles': decryption_keys}
             try:
@@ -149,7 +157,7 @@ class OllamaChatHandler:
             try:
                 decryption_key = decryption_key_response.parsed['cle_secrete_base64']
                 decryption_key: bytes = multibase.decode('m' + decryption_key)
-            except KeyError as e:
+            except KeyError:
                 self.__logger.error("Error receving key cle_id:%s\nRequest: %s\nResponse: %s" % (cle_id, dechiffrage, decryption_key_response))
                 await producer.reply({'ok': False, 'err': 'Error decrypting key'},
                                      correlation_id=correlation_id, reply_to=reply_to)
@@ -194,13 +202,16 @@ class OllamaChatHandler:
                                     current_message_content += "\nPDF file full content:\n\n" + text_content
 
                         elif mimetype.startswith('image/'):
-                            file_size = await self.__attachment_handler.download_decrypt_file(decryption_key_attached_file,
-                                                                                              attached_file, tmp_file)
-                            if image_attachments is None:
-                                image_attachments = list()
+                            if 'vision' in model_capabilities:
+                                file_size = await self.__attachment_handler.download_decrypt_file(decryption_key_attached_file,
+                                                                                                  attached_file, tmp_file)
+                                if image_attachments is None:
+                                    image_attachments = list()
 
-                            content = await self.__attachment_handler.prepare_image(file_size, tmp_file)
-                            image_attachments.append(content)
+                                content = await self.__attachment_handler.prepare_image(file_size, tmp_file)
+                                image_attachments.append(content)
+                            else:
+                                self.__logger.debug(f"Ignoring image for model {chat_model} that does not support vision")
                         else:
                             raise NotImplementedError('File type not handled')
                 pass
@@ -214,7 +225,6 @@ class OllamaChatHandler:
             action = message.routage['action']
 
             # Run the query. Emit
-            done_event = asyncio.Event()
             if action == 'chat':
                 chat_stream = self.ollama_chat(instance, user_profile, chat_messages, chat_model)
             else:
@@ -313,7 +323,8 @@ class OllamaChatHandler:
             except KeyError:
                 pass  # Ok, could have been cancelled
 
-    async def stream_chat_response(self, chat_id: str, output: dict, enveloppe, correlation_id, reply_to, chat_stream):
+    async def stream_chat_response(self, chat_id: str, output: dict, enveloppe: EnveloppeCertificat, correlation_id: str,
+                                   reply_to: str, chat_stream: AsyncGenerator[ChatResponse, Any]):
         producer = await self.__context.get_producer()
         emit_interval = datetime.timedelta(milliseconds=750)
         next_emit = datetime.datetime.now() + emit_interval

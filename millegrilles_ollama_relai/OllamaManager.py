@@ -91,18 +91,19 @@ class OllamaManager:
         self.__logger.info("__reload_filehost_thread Stopping")
 
     async def reload_filehost_configuration(self):
-        producer = await self.__context.get_producer()
-        response = await producer.request(
-            dict(), 'CoreTopologie', 'getFilehostForInstance', exchange="1.public")
-
-        try:
-            filehost_response = response.parsed
-            filehost_dict = filehost_response['filehost']
-            filehost = Filehost.load_from_dict(filehost_dict)
-            self.__context.filehost = filehost
-        except (KeyError, AttributeError, ValueError):
-            self.__logger.exception("Error loading filehost")
-            self.__context.filehost = None
+        await self.__context.reload_filehost_configuration()
+        # producer = await self.__context.get_producer()
+        # response = await producer.request(
+        #     dict(), 'CoreTopologie', 'getFilehostForInstance', exchange="1.public")
+        #
+        # try:
+        #     filehost_response = response.parsed
+        #     filehost_dict = filehost_response['filehost']
+        #     filehost = Filehost.load_from_dict(filehost_dict)
+        #     self.__context.filehost = filehost
+        # except (KeyError, AttributeError, ValueError):
+        #     self.__logger.exception("Error loading filehost")
+        #     self.__context.filehost = None
 
         for l in self.__filehost_listeners:
             await l(self.__context.filehost)
