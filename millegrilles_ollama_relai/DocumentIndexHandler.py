@@ -266,6 +266,8 @@ class DocumentIndexHandler:
                 fuuid = job.get('fuuid') or version['fuuid']
             except (TypeError, KeyError, UnicodeDecodeError) as e:
                 self.__logger.warning(f"__intake_thread Error getting value for tuuid: {job.get('tuuid')} / fuuid: {job.get('fuuid')}: {str(e)}, skipping")
+                await self.__cancel_job(job)
+                continue  # Skip this job
             except:
                 self.__logger.exception("Unhandled exception, quitting intake_thread")
                 self.__context.stop()
