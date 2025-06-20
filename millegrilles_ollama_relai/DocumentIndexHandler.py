@@ -9,6 +9,7 @@ import math
 from asyncio import TaskGroup
 from typing import Optional, TypedDict
 
+from ollama import AsyncClient
 from pydantic import Field
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
@@ -20,26 +21,41 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pypdf.errors import PdfStreamError
 
 from millegrilles_messages.chiffrage.DechiffrageUtils import dechiffrer_document_secrete, dechiffrer_bytes_secrete
+from millegrilles_messages.chiffrage.Mgs4 import chiffrer_mgs4_bytes_secrete
 from millegrilles_messages.messages import Constantes
 
 from millegrilles_messages.messages.MessagesModule import MessageWrapper
 from millegrilles_messages.Filehost import FilehostConnection
-from millegrilles_ollama_relai.OllamaContext import OllamaContext
+from millegrilles_ollama_relai.OllamaContext import OllamaContext, RagConfiguration
 from millegrilles_ollama_relai.OllamaInstanceManager import OllamaInstance, model_name_to_id, OllamaInstanceManager
 from millegrilles_ollama_relai.Util import decode_base64_nopad
 
+LOGGER = logging.getLogger(__name__)
+
+CONST_ACTION_RAG = 'leaseForRag'
+CONST_ACTION_SUMMARY = 'leaseForSummary'
+
+CONST_JOB_RAG = 'rag'
+CONST_JOB_SUMMARY_TEXT = 'summaryText'
+CONST_JOB_SUMMARY_IMAGE = 'summaryImage'
+
 
 class FileInformation(TypedDict):
-    tuuid: str
-    user_id: str
+    job_type: Optional[str]
+    lease_action: str
+    tuuid: Optional[str]
+    fuuid: Optional[str]
+    user_id: Optional[str]
     domain: str
     cuuids: Optional[list[str]]
-    metadata: dict
+    metadata: Optional[dict]
     mimetype: Optional[str]
     version: Optional[dict]
     key: Optional[dict]
     decrypted_metadata: Optional[dict]
     tmp_file: Optional[tempfile.NamedTemporaryFile]
+    media: Optional[dict]
+    file: Optional[dict]
 
 QUERY_BATCH_RAG_LEN = 30
 # CONTEXT_LEN = 4096
@@ -84,7 +100,6 @@ class DocumentIndexHandler:
             noformat=True, nowait=True)
 
         return False  # The response is handled by the processing instance
-
 
     async def trigger_indexing(self):
         self.__event_fetch_jobs.set()
@@ -179,6 +194,13 @@ class DocumentIndexHandler:
         self.__event_fetch_jobs.set()
 
     async def __query_thread(self):
+        # Wait for initialization
+        await self.__context.ai_configuration_loaded.wait()
+        while not self.__ollama_instances.ready:
+            await self.__context.wait(3)
+            if self.__context.stopping:
+                return
+
         while self.__context.stopping is False:
             self.__event_fetch_jobs.clear()
 
@@ -193,7 +215,7 @@ class DocumentIndexHandler:
                 else:
                     if instance is not None:
                         # Try to fetch more items
-                        self.__logger.debug("Triggering fetch of new batch of files for RAG (low/empty intake queue)")
+                        self.__logger.debug("Triggering fetch of new batch of files for RAG/Summary (low/empty intake queue)")
                         try:
                             await self.__query_batch_rag()
                         except asyncio.TimeoutError:
@@ -221,52 +243,69 @@ class DocumentIndexHandler:
             if job is None:
                 return  # Stopping
 
+            job_type = job['job_type']
+
             # Decrypt all content
             try:
                 secret_key_str = job['key']['cle_secrete_base64']
                 secret_key = decode_base64_nopad(secret_key_str)
-                metadata = dechiffrer_document_secrete(secret_key, job['metadata'])
-                filename = metadata['nom']
-                job['decrypted_metadata'] = metadata
 
-                mimetype = job.get('mimetype')
+                if job == CONST_ACTION_RAG:
+                    metadata = dechiffrer_document_secrete(secret_key, job['metadata'])
+                    filename = metadata['nom']
+                    job['decrypted_metadata'] = metadata
+                else:
+                    filename = job['fuuid']
+
                 version = job.get('version')
-                fuuid = version['fuuid']
+                fuuid = job.get('fuuid') or version['fuuid']
             except (TypeError, KeyError, UnicodeDecodeError) as e:
-                self.__logger.warning(f"__intake_thread Error getting value for tuuid: {job['tuuid']}: {str(e)}, skipping")
+                self.__logger.warning(f"__intake_thread Error getting value for tuuid: {job.get('tuuid')} / fuuid: {job.get('fuuid')}: {str(e)}, skipping")
             else:
-                if mimetype and version:
-                    mimetype = mimetype.lower()
-                    if mimetype in ['application/pdf']:
-                        # Download file
-                        tmp_file = tempfile.NamedTemporaryFile(mode='wb+')
+                if job_type and fuuid:  # Job to do, download file
+                    tmp_file = tempfile.NamedTemporaryFile(mode='wb+')
+                    try:
+                        # Combine version and key to ensure legacy decryption info is available
+                        file_to_download = job.get('file')
+                        if file_to_download is None:
+                            file_to_download = version.copy()
+                        # info_decryption.update(job['key'])
+                        key = job['key']
+                        file_to_download['format'] = file_to_download.get('format') or key.get('format') or 'mgs4'  # Default format
+                        nonce = file_to_download.get('nonce') or key.get('nonce')
+                        if nonce is None:
+                            header = file_to_download.get('header') or key.get('header')
+                            nonce = header[1:]
+                        file_to_download['nonce'] = nonce
                         try:
-                            # Combine version and key to ensure legacy decryption info is available
-                            info_decryption = version.copy()
-                            # info_decryption.update(job['key'])
-                            key = job['key']
-                            info_decryption['format'] = info_decryption.get('format') or key.get('format') or 'mgs4'  # Default format
-                            nonce = info_decryption.get('nonce') or key.get('nonce')
-                            if nonce is None:
-                                header = info_decryption.get('header') or key.get('header')
-                                nonce = header[1:]
-                            info_decryption['nonce'] = nonce
-                            try:
-                                filesize = await self.__attachment_handler.download_decrypt_file(secret_key_str, info_decryption, tmp_file)
-                                self.__logger.debug(f"Downloaded {filesize} bytes for file {filename}")
-                            except* asyncio.CancelledError:
-                                raise Exception(f"Error downloading fuuid {fuuid}, will retry")
-                        except:
-                            tmp_file.close()
-                            self.__logger.exception(f"Error downloading fuuid {fuuid}, will retry")
-                            continue  # Ignore this file for now, don't mark it processed
+                            filesize = await self.__attachment_handler.download_decrypt_file(secret_key_str, file_to_download, tmp_file)
+                            self.__logger.debug(f"Downloaded {filesize} bytes for file {filename}")
+                        except* asyncio.CancelledError:
+                            raise Exception(f"Error downloading fuuid {fuuid}, will retry")
+                    except:
+                        tmp_file.close()
+                        self.__logger.exception(f"Error downloading fuuid {fuuid}, will retry")
+                        continue  # Ignore this file for now, don't mark it processed
 
-                        # Process decrypted file
-                        tmp_file.seek(0)
-                        job['tmp_file'] = tmp_file
+                    # Process decrypted file
+                    tmp_file.seek(0)
+                    job['tmp_file'] = tmp_file
 
             # Pass content on to indexing
             await self.__indexing_queue.put(job)
+
+    async def __cancel_job(self, job: FileInformation):
+        lease_action = job['lease_action']
+        producer = await self.__context.get_producer()
+        if lease_action == CONST_ACTION_SUMMARY:
+            fuuid = job['version']['fuuid']
+            command = {'fuuid': fuuid}
+            await producer.command(command, Constantes.DOMAINE_GROS_FICHIERS, "fileSummary",
+                                   Constantes.SECURITE_PROTEGE, timeout=45)
+        elif lease_action == CONST_ACTION_RAG:
+            command = {"tuuid": job['tuuid'], "user_id": job['user_id']}
+            await producer.command(command, Constantes.DOMAINE_GROS_FICHIERS, "confirmRag",
+                                   Constantes.SECURITE_PROTEGE, timeout=45)
 
     async def __index_thread(self):
         while self.__context.stopping is False:
@@ -274,55 +313,123 @@ class DocumentIndexHandler:
             if job is None:
                 return  # Stopping
 
-            tuuid = job['tuuid']
-            user_id = job['user_id']
-            domain = job['domain']
-            cuuids = job.get('cuuids')
-            metadata = job['decrypted_metadata']
-            try:
-                filename = metadata['nom']
-                self.__logger.debug(f"Indexing file {filename} with RAG")
-            except (TypeError, KeyError):
-                filename = tuuid
+            job_type = job['job_type']
 
             tmp_file = job.get('tmp_file')
+            tuuid = job.get('tuuid')
+            fuuid = job.get('fuuid')
             if tmp_file:
                 try:
                     rag_configuration = self.__context.rag_configuration
                     if rag_configuration is None:
                         raise Exception("No RAG configuration provided - configure it with MilleGrilles AiChat")
 
-                    embedding_model = rag_configuration['model_embedding_name']
-                    instance = self.__ollama_instances.pick_instance_for_model(embedding_model)
-                    if instance is None:
-                        raise Exception(f'Unsupported model: {embedding_model}')
-
-                    async with instance.semaphore:
-                        vector_store = await asyncio.to_thread(self.open_vector_store, domain, user_id, instance, embedding_model)
-                        await asyncio.to_thread(index_pdf_file, vector_store, tuuid, filename, cuuids, tmp_file)
-                except (TypeError, ValueError, PdfStreamError) as e:
-                    self.__logger.exception(f"Error processing file tuuid {tuuid}), rejecting: %s" % str(e))
-                    pass  # The file will be marked as processed later on
+                    try:
+                        if job_type == CONST_JOB_RAG:
+                            await self.__run_rag_indexing(job, tmp_file)
+                        elif job_type in [CONST_JOB_SUMMARY_TEXT, CONST_JOB_SUMMARY_IMAGE]:
+                            await self.__run_summarize_file(job, tmp_file)
+                        else:
+                            self.__logger.error(f"Unknown job type {job_type}, CANCELLING for tuuid:{tuuid}/fuuid:{fuuid}")
+                            await self.__cancel_job(job)
+                    except* asyncio.CancelledError as e:
+                        if self.__context.stopping:
+                            pass
+                        else:
+                            self.__logger.warning(f"RAG/Summary job cancelled: {e}")
+                except UnicodeDecodeError as e:
+                    self.__logger.error(f"Error handling file tuuid:{tuuid}/fuuid:{fuuid}, CANCELLING: {e}")
+                    await self.__cancel_job(job)
                 except:
-                    self.__logger.exception(f"Error processing file tuuid {tuuid}, will retry")
+                    self.__logger.exception(f"Error processing file tuuid:{tuuid}/fuuid:{fuuid}, will retry")
                     continue
                 finally:
                     self.__logger.debug("Closing tmp file")
                     tmp_file.close()
             else:
                 # Nothing to do
-                pass
+                await self.__cancel_job(job)
 
-            # Mark the file as processed
-            producer = await self.__context.get_producer()
-            command = {"tuuid": tuuid, "user_id": user_id}
-            for i in range(0, 5):
-                try:
-                    await producer.command(command, Constantes.DOMAINE_GROS_FICHIERS, "confirmRag", Constantes.SECURITE_PROTEGE, timeout=45)
-                    break
-                except asyncio.TimeoutError:
-                    self.__logger.warning("Timeout sending RAG result, will retry")
-                    await self.__context.wait(5)
+    async def __run_rag_indexing(self, job: FileInformation, tmp_file: tempfile.NamedTemporaryFile):
+        rag_configuration = self.__context.rag_configuration
+        if rag_configuration is None:
+            raise Exception("No RAG configuration provided - configure it with MilleGrilles AiChat")
+
+        job_type = job['job_type']
+        tuuid = job.get('tuuid')
+        user_id = job['user_id']
+        domain = job['domain']
+        cuuids = job.get('cuuids')
+        metadata = job.get('decrypted_metadata')
+        try:
+            filename = metadata['nom']
+            self.__logger.debug(f"Processing file {filename} with jon type {job_type}")
+        except (TypeError, KeyError):
+            filename = tuuid
+
+        embedding_model = rag_configuration['model_embedding_name']
+        instance = self.__ollama_instances.pick_instance_for_model(embedding_model)
+        if instance is None:
+            raise Exception(f'Unsupported model: {embedding_model}')
+
+        try:
+            async with instance.semaphore:
+                vector_store = await asyncio.to_thread(self.open_vector_store, domain, user_id, instance, embedding_model)
+                await asyncio.to_thread(index_pdf_file, vector_store, tuuid, filename, cuuids, tmp_file)
+        except (TypeError, ValueError, PdfStreamError) as e:
+            self.__logger.exception(f"Error processing file tuuid:{tuuid}, rejecting: %s" % str(e))
+            pass  # The file will be marked as processed later on
+
+        # Mark the file as processed
+        producer = await self.__context.get_producer()
+        command = {"tuuid": tuuid, "user_id": user_id}
+        for i in range(0, 5):
+            try:
+                await producer.command(command, Constantes.DOMAINE_GROS_FICHIERS, "confirmRag",
+                                       Constantes.SECURITE_PROTEGE, timeout=45)
+                break
+            except asyncio.TimeoutError:
+                self.__logger.warning("Timeout sending RAG result, will retry")
+                await self.__context.wait(5)
+
+    async def __run_summarize_file(self, job: FileInformation, tmp_file: tempfile.NamedTemporaryFile):
+        rag_configuration = self.__context.rag_configuration
+        if rag_configuration is None:
+            raise Exception("No RAG configuration provided - configure it with MilleGrilles AiChat")
+
+        embedding_model = rag_configuration['model_query_name']
+        instance = self.__ollama_instances.pick_instance_for_model(embedding_model)
+        if instance is None:
+            raise Exception(f'Unsupported model: {embedding_model}')
+
+        encryption_key = job['key']
+        secret_key: bytes = decode_base64_nopad(encryption_key['cle_secrete_base64'])
+        key_id = encryption_key['cle_id']
+
+        async with instance.semaphore:
+            client = instance.get_async_client(self.__context.configuration)
+            result = await summarize_file(client, job, rag_configuration, tmp_file)
+
+        # Encrypt result
+        cleartext = json.dumps({"comment": result})
+        cipher, encrypted_response = chiffrer_mgs4_bytes_secrete(secret_key, cleartext)
+        encrypted_response['cle_id'] = key_id
+
+        # Send result as new comment for file
+        summary_command = {
+            'fuuid': job['version']['fuuid'],
+            'comment': encrypted_response
+        }
+        producer = await self.__context.get_producer()
+        for i in range(0, 5):
+            try:
+                await producer.command(summary_command, Constantes.DOMAINE_GROS_FICHIERS, "fileSummary",
+                                       Constantes.SECURITE_PROTEGE, timeout=45)
+                break
+            except asyncio.TimeoutError:
+                self.__logger.warning("Timeout sending summary result, will retry")
+                await self.__context.wait(5)
+
 
     async def __query_batch_rag(self):
         producer = await self.__context.get_producer()
@@ -339,57 +446,127 @@ class DocumentIndexHandler:
             await self.__context.wait(5)
             filehost_id = self.__context.filehost.filehost_id
 
-        # Get the batch
-        command = {"batch_size": batch_size, "filehost_id": filehost_id}
-        try:
-            response = await producer.command(command, Constantes.DOMAINE_GROS_FICHIERS, "leaseForRag",
-                                              Constantes.SECURITE_PROTEGE, timeout=60)
-        except asyncio.TimeoutError:
-            self.__logger.warning("Timeout on leaseForRag, will retry")
-            return
+        for lease_action in [CONST_ACTION_SUMMARY, CONST_ACTION_RAG]:
+            batch_size = self.__intake_queue.maxsize - self.__intake_queue.qsize()
 
-        parsed = response.parsed
-        if parsed['ok'] is not True:
-            self.__logger.warning("Error retrieving batch of files for RAG: %s" % parsed)
-        elif parsed.get('code') == 1:
-            self.__logger.debug("No more files to process for RAG")
-            return
-
-        # Parse batch file and insert on queue per item
-        leases = parsed['leases']
-        secret_keys: list = parsed['secret_keys']
-
-        self.__logger.debug(f"Received batch of files {len(leases)} for RAG indexing")
-
-        for lease in leases:
-            metadata = lease['metadata']
-            version = lease.get('version')
-            cuuids = lease.get('cuuids')
-            fuuid: Optional[str] = None
-            if version:
-                fuuid = version['fuuid']
-            cle_id = metadata.get('cle_id') or metadata.get('ref_hachage_bytes') or fuuid
-
+            # Get the batch
+            command = {"batch_size": batch_size, "filehost_id": filehost_id}
             try:
-                key = [k for k in secret_keys if k['cle_id'] == cle_id].pop()
-            except IndexError:
-                self.__logger.warning(f"Missing key for fuuid {fuuid}, skipping")
-                key = None
+                response = await producer.command(command, Constantes.DOMAINE_GROS_FICHIERS, lease_action,
+                                                  Constantes.SECURITE_PROTEGE, timeout=60)
+            except asyncio.TimeoutError:
+                self.__logger.warning(f"Timeout on {lease_action}, will retry")
+                return
 
-            info: FileInformation = {
-                'tuuid': lease['tuuid'],
-                'user_id': lease['user_id'],
-                'domain': Constantes.DOMAINE_GROS_FICHIERS,
-                'cuuids': cuuids,
-                'metadata': metadata,
-                'mimetype': lease.get('mimetype'),
-                'version': lease.get('version'),
-                'key': key,
-                'tmp_file': None,
-                'decrypted_metadata': None
-            }
+            parsed = response.parsed
+            if parsed['ok'] is not True:
+                self.__logger.warning("Error retrieving batch of files for RAG: %s" % parsed)
+            elif parsed.get('code') == 1:
+                self.__logger.debug("No more files to process for RAG")
+                return
 
-            await self.__intake_queue.put(info)
+            # Parse batch file and insert on queue per item
+            leases = parsed['leases']
+            secret_keys: list = parsed['secret_keys']
+
+            self.__logger.debug(f"Received batch of files {len(leases)} for RAG indexing")
+
+            for lease in leases:
+                if lease_action == CONST_ACTION_RAG:
+                    metadata = lease.get('metadata')
+                    version = lease.get('version')
+                    cuuids = lease.get('cuuids')
+                    fuuid: Optional[str] = None
+
+                    cle_id = None
+                    mimetype = lease.get('mimetype')
+                    if version:
+                        fuuid = version['fuuid']
+                        cle_id = version.get('cle_id')
+                        mimetype = mimetype or version.get('mimetype')
+
+                    if metadata and not cle_id:
+                        cle_id = cle_id or metadata.get('cle_id') or metadata.get('ref_hachage_bytes')
+                    cle_id = cle_id or fuuid
+
+                    try:
+                        key = [k for k in secret_keys if k['cle_id'] == cle_id].pop()
+                    except IndexError:
+                        self.__logger.warning(f"Missing key for fuuid {fuuid}, skipping")
+                        key = None
+
+                    if mimetype == 'application/pdf' or mimetype.startswith('text/'):
+                        job_type = CONST_JOB_RAG
+                    else:
+                        job_type = None  # Nothing to do
+
+                    info: FileInformation = {
+                        'job_type': job_type,
+                        'lease_action': CONST_ACTION_RAG,
+                        'tuuid': lease.get('tuuid'),
+                        'fuuid': lease.get('fuuid'),
+                        'user_id': lease['user_id'],
+                        'domain': Constantes.DOMAINE_GROS_FICHIERS,
+                        'cuuids': cuuids,
+                        'metadata': metadata,
+                        'mimetype': lease.get('mimetype'),
+                        'version': lease.get('version'),
+                        'key': key,
+                        'tmp_file': None,
+                        'decrypted_metadata': None,
+                        'media': None,
+                        'file': None,
+                    }
+                elif lease_action == CONST_ACTION_SUMMARY:
+                    version = lease['version']
+                    fuuid = version['fuuid']
+                    cle_id = version.get('cle_id') or version.get('ref_hachage_bytes') or fuuid
+
+                    try:
+                        key = [k for k in secret_keys if k['cle_id'] == cle_id].pop()
+                    except IndexError:
+                        self.__logger.warning(f"Missing key for fuuid {fuuid}, skipping")
+                        key = None
+
+                    mimetype = version['mimetype']
+                    media = lease.get('media')
+                    image_file = None
+                    if mimetype == 'application/pdf' or mimetype.startswith('text/'):
+                        job_type = CONST_JOB_SUMMARY_TEXT
+                    elif mimetype.startswith('image/'):
+                        job_type = CONST_JOB_SUMMARY_IMAGE
+                        # Check to find a webp fuuid, will be smaller and easier to digest
+                        try:
+                            images = media['images']
+                            webp_img = [m for m in images.keys() if m.startswith('image/webp')].pop()
+                            image_file = images[webp_img]
+                            image_file['fuuid'] = image_file['hachage']
+                        except (AttributeError, IndexError, TypeError):
+                            pass
+                    else:
+                        job_type = None
+
+                    info: FileInformation = {
+                        'job_type': job_type,
+                        'lease_action': lease_action,
+                        'tuuid': lease.get('tuuid'),
+                        'fuuid': fuuid,
+                        'user_id': None,
+                        'domain': Constantes.DOMAINE_GROS_FICHIERS,
+                        'cuuids': None,
+                        'metadata': None,
+                        'mimetype': mimetype,
+                        'version': version,  # Lease is the version information
+                        'key': key,
+                        'tmp_file': None,
+                        'decrypted_metadata': None,
+                        'media': lease.get('media'),
+                        'file': image_file,
+                    }
+                else:
+                    raise Exception(f"Unknown lease type {lease_action}, skipping")
+
+                await self.__intake_queue.put(info)
 
         pass
 
@@ -444,6 +621,40 @@ def index_pdf_file(vector_store: VectorStore, tuuid: str, filename: str, cuuids:
         if cuuids is not None:
             chunk.metadata['cuuids'] = ','.join(cuuids)
     vector_store.add_documents(list(chunks))
+
+async def summarize_file(client: AsyncClient, job: FileInformation, rag_configuration: RagConfiguration,
+                         tmp_file: tempfile.NamedTemporaryFile) -> str:
+    context_len = rag_configuration.get('context_len') or 4096
+
+    query_model = rag_configuration['model_query_name']
+
+    job_type = job['job_type']
+    if job_type == CONST_JOB_SUMMARY_TEXT:
+        system_prompt, command_prompt = await format_text_prompt(context_len, job['mimetype'], tmp_file)
+        LOGGER.debug(f"PROMPT (len:{len(system_prompt) + len(command_prompt)})\n{command_prompt}")
+        response = await client.generate(
+            model=query_model,
+            # prompt=system_prompt + "\n" + command_prompt,
+            prompt=command_prompt,
+            system=system_prompt,
+            options={"temperature": 0.0, "num_ctx": context_len}
+        )
+    elif job_type == CONST_JOB_SUMMARY_IMAGE:
+        system_prompt, command_prompt = await format_image_prompt()
+        LOGGER.debug(f"PROMPT (len:{len(system_prompt) + len(command_prompt)})\n{command_prompt}")
+        image_content = tmp_file.read()
+        response = await client.generate(
+            model=query_model,
+            # prompt=system_prompt + "\n" + command_prompt,
+            prompt=command_prompt,
+            system=system_prompt,
+            options={"temperature": 0.0, "num_ctx": context_len},
+            images=[image_content]
+        )
+    else:
+        raise ValueError(f"Unsupported job type: {job_type}")
+
+    return response.response
 
 
 class FilteredCuuidsRetriever(BaseRetriever):
@@ -528,3 +739,50 @@ Provide a clear and direct response to the user's query, including inline citati
     """
 
     return system_prompt, command_prompt, doc_ref
+
+
+async def format_image_prompt():
+
+    system_prompt = """
+# Task
+Generate a detailed description of the image.
+"""
+    command_prompt = "Describe this image"
+
+    return system_prompt, command_prompt
+
+async def format_text_prompt(context_len: int, mimetype: str, tmp_file: tempfile.NamedTemporaryFile):
+    system_prompt = """
+# Task
+Summarize the content of this document.
+
+* If the document is an invoice, simply summarize as: Invoice of company A, total amount:$123.45 due by 2024-05-06.
+* If the document is a contract, state summarize as: Contract between parties A, B and C on topic of contract.
+* If the document is an article, summarize by including the *title* and using 200 words or less. For example: *The new PDF* The new PDF is an enhanced format ...
+* When possible, include the number of pages at the end of the summary.
+
+# Separate information required on all types
+Create a comma-separated list of tags, for example: pdf, invoice, article, 2024 
+Identify the language of the document and return the ISO-639 language code. For example fr_CA, en_US, etc.
+"""
+    context_chars = math.floor(2.5 * context_len)
+
+    if mimetype == 'application/pdf':
+        loader = PyPDFLoader(tmp_file.name, mode="single")
+        document_list = loader.load()
+        content = document_list[0]
+        try:
+            content = content.page_content[0:context_chars]
+        except IndexError:
+            pass  # Document fits in context
+
+    elif mimetype.startswith('text/'):
+        content = tmp_file.read(context_chars).decode('utf-8')
+
+    else:
+        raise ValueError(f"Unsupported document mimetype: {mimetype}")
+
+    command_prompt = f"<document>{content}</document>"
+    tmp_file.seek(0)
+
+    return system_prompt, command_prompt
