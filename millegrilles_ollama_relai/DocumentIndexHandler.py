@@ -8,6 +8,8 @@ import math
 
 from asyncio import TaskGroup
 from typing import Optional, TypedDict
+
+import nacl.exceptions
 from pydantic import Field, ValidationError
 
 from ollama import AsyncClient
@@ -284,6 +286,11 @@ class DocumentIndexHandler:
                             self.__logger.debug(f"Downloaded {filesize} bytes for file {filename}")
                         except* asyncio.CancelledError:
                             raise Exception(f"Error downloading fuuid {fuuid}, will retry")
+                    except nacl.exceptions.RuntimeError:
+                        tmp_file.close()
+                        self.__logger.exception(f"Error decrypting fuuid {fuuid}, CANCELLING")
+                        await self.__cancel_job(job)
+                        continue
                     except:
                         tmp_file.close()
                         self.__logger.exception(f"Error downloading fuuid {fuuid}, will retry")
