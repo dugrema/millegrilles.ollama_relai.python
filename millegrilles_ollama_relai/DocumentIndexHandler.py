@@ -314,7 +314,11 @@ class DocumentIndexHandler:
         producer = await self.__context.get_producer()
         if lease_action == CONST_ACTION_SUMMARY:
             tuuid = job['tuuid']
-            fuuid = job['version']['fuuid']
+            try:
+                fuuid = job['version']['fuuid']
+            except KeyError:
+                self.__logger.exception("Unable to cancel job: %s" % job)
+                return
             command = {'tuuid': tuuid, 'fuuid': fuuid}
             await producer.command(command, Constantes.DOMAINE_GROS_FICHIERS, "fileSummary",
                                    Constantes.SECURITE_PROTEGE, timeout=45)
