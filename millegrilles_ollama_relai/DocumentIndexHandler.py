@@ -8,7 +8,7 @@ import math
 
 from asyncio import TaskGroup
 from typing import Optional, TypedDict
-from pydantic import Field
+from pydantic import Field, ValidationError
 
 from ollama import AsyncClient
 from langchain_chroma import Chroma
@@ -47,6 +47,7 @@ class FileInformation(TypedDict):
     tuuid: Optional[str]
     fuuid: Optional[str]
     user_id: Optional[str]
+    language: str
     domain: str
     cuuids: Optional[list[str]]
     metadata: Optional[dict]
@@ -299,8 +300,9 @@ class DocumentIndexHandler:
         lease_action = job['lease_action']
         producer = await self.__context.get_producer()
         if lease_action == CONST_ACTION_SUMMARY:
+            tuuid = job['tuuid']
             fuuid = job['version']['fuuid']
-            command = {'fuuid': fuuid}
+            command = {'tuuid': tuuid, 'fuuid': fuuid}
             await producer.command(command, Constantes.DOMAINE_GROS_FICHIERS, "fileSummary",
                                    Constantes.SECURITE_PROTEGE, timeout=45)
         elif lease_action == CONST_ACTION_RAG:
@@ -338,7 +340,7 @@ class DocumentIndexHandler:
                             pass
                         else:
                             self.__logger.warning(f"RAG/Summary job cancelled: {e}")
-                except UnicodeDecodeError as e:
+                except (ValidationError, UnicodeDecodeError) as e:
                     self.__logger.error(f"Error handling file tuuid:{tuuid}/fuuid:{fuuid}, CANCELLING: {e}")
                     await self.__cancel_job(job)
                 except:
@@ -433,9 +435,10 @@ class DocumentIndexHandler:
 
         # Send result as new comment for file
         summary_command = {
+            'tuuid': job['tuuid'],
             'fuuid': job['version']['fuuid'],
             'comment': encrypted_summary,
-            'file_language': summary.language,
+            # 'file_language': summary.language,
             'tags': encrypted_tags,
         }
         producer = await self.__context.get_producer()
@@ -490,65 +493,36 @@ class DocumentIndexHandler:
             self.__logger.debug(f"Received batch of files {len(leases)} for RAG indexing")
 
             for lease in leases:
+                metadata = lease.get('metadata')
+                version = lease.get('version')
+                cuuids = lease.get('cuuids')
+                fuuid: Optional[str] = None
+
+                cle_id = None
+                mimetype = lease.get('mimetype')
+                if version:
+                    fuuid = version['fuuid']
+                    cle_id = version.get('cle_id')
+                    mimetype = mimetype or version.get('mimetype')
+
+                if metadata and not cle_id:
+                    cle_id = cle_id or metadata.get('cle_id') or metadata.get('ref_hachage_bytes')
+                cle_id = cle_id or fuuid
+
+                try:
+                    key = [k for k in secret_keys if k['cle_id'] == cle_id].pop()
+                except IndexError:
+                    self.__logger.warning(f"Missing key for fuuid {fuuid}, skipping")
+                    key = None
+
+                image_file = None
                 if lease_action == CONST_ACTION_RAG:
-                    metadata = lease.get('metadata')
-                    version = lease.get('version')
-                    cuuids = lease.get('cuuids')
-                    fuuid: Optional[str] = None
-
-                    cle_id = None
-                    mimetype = lease.get('mimetype')
-                    if version:
-                        fuuid = version['fuuid']
-                        cle_id = version.get('cle_id')
-                        mimetype = mimetype or version.get('mimetype')
-
-                    if metadata and not cle_id:
-                        cle_id = cle_id or metadata.get('cle_id') or metadata.get('ref_hachage_bytes')
-                    cle_id = cle_id or fuuid
-
-                    try:
-                        key = [k for k in secret_keys if k['cle_id'] == cle_id].pop()
-                    except IndexError:
-                        self.__logger.warning(f"Missing key for fuuid {fuuid}, skipping")
-                        key = None
-
                     if mimetype == 'application/pdf' or mimetype.startswith('text/'):
                         job_type = CONST_JOB_RAG
                     else:
                         job_type = None  # Nothing to do
-
-                    info: FileInformation = {
-                        'job_type': job_type,
-                        'lease_action': CONST_ACTION_RAG,
-                        'tuuid': lease.get('tuuid'),
-                        'fuuid': lease.get('fuuid'),
-                        'user_id': lease['user_id'],
-                        'domain': Constantes.DOMAINE_GROS_FICHIERS,
-                        'cuuids': cuuids,
-                        'metadata': metadata,
-                        'mimetype': lease.get('mimetype'),
-                        'version': lease.get('version'),
-                        'key': key,
-                        'tmp_file': None,
-                        'decrypted_metadata': None,
-                        'media': None,
-                        'file': None,
-                    }
                 elif lease_action == CONST_ACTION_SUMMARY:
-                    version = lease['version']
-                    fuuid = version['fuuid']
-                    cle_id = version.get('cle_id') or version.get('ref_hachage_bytes') or fuuid
-
-                    try:
-                        key = [k for k in secret_keys if k['cle_id'] == cle_id].pop()
-                    except IndexError:
-                        self.__logger.warning(f"Missing key for fuuid {fuuid}, skipping")
-                        key = None
-
-                    mimetype = version['mimetype']
                     media = lease.get('media')
-                    image_file = None
                     if mimetype == 'application/pdf' or mimetype.startswith('text/'):
                         job_type = CONST_JOB_SUMMARY_TEXT
                     elif mimetype.startswith('image/'):
@@ -563,26 +537,76 @@ class DocumentIndexHandler:
                             pass
                     else:
                         job_type = None
-
-                    info: FileInformation = {
-                        'job_type': job_type,
-                        'lease_action': lease_action,
-                        'tuuid': lease.get('tuuid'),
-                        'fuuid': fuuid,
-                        'user_id': None,
-                        'domain': Constantes.DOMAINE_GROS_FICHIERS,
-                        'cuuids': None,
-                        'metadata': None,
-                        'mimetype': mimetype,
-                        'version': version,  # Lease is the version information
-                        'key': key,
-                        'tmp_file': None,
-                        'decrypted_metadata': None,
-                        'media': lease.get('media'),
-                        'file': image_file,
-                    }
                 else:
-                    raise Exception(f"Unknown lease type {lease_action}, skipping")
+                    job_type = None
+
+                info: FileInformation = {
+                    'job_type': job_type,
+                    'lease_action': lease_action,
+                    'tuuid': lease.get('tuuid'),
+                    'fuuid': lease.get('fuuid'),
+                    'user_id': lease['user_id'],
+                    'language': 'en_US',
+                    'domain': Constantes.DOMAINE_GROS_FICHIERS,
+                    'cuuids': cuuids,
+                    'metadata': metadata,
+                    'mimetype': lease.get('mimetype'),
+                    'version': lease.get('version'),
+                    'key': key,
+                    'tmp_file': None,
+                    'decrypted_metadata': None,
+                    'media': lease.get('media'),
+                    'file': image_file,
+                }
+                # elif lease_action == CONST_ACTION_SUMMARY:
+                #     version = lease['version']
+                #     fuuid = version['fuuid']
+                #     cle_id = version.get('cle_id') or version.get('ref_hachage_bytes') or fuuid
+                #
+                #     try:
+                #         key = [k for k in secret_keys if k['cle_id'] == cle_id].pop()
+                #     except IndexError:
+                #         self.__logger.warning(f"Missing key for fuuid {fuuid}, skipping")
+                #         key = None
+                #
+                #     mimetype = version['mimetype']
+                #     media = lease.get('media')
+                #     image_file = None
+                #     if mimetype == 'application/pdf' or mimetype.startswith('text/'):
+                #         job_type = CONST_JOB_SUMMARY_TEXT
+                #     elif mimetype.startswith('image/'):
+                #         job_type = CONST_JOB_SUMMARY_IMAGE
+                #         # Check to find a webp fuuid, will be smaller and easier to digest
+                #         try:
+                #             images = media['images']
+                #             webp_img = [m for m in images.keys() if m.startswith('image/webp')].pop()
+                #             image_file = images[webp_img]
+                #             image_file['fuuid'] = image_file['hachage']
+                #         except (AttributeError, IndexError, TypeError):
+                #             pass
+                #     else:
+                #         job_type = None
+                #
+                #     info: FileInformation = {
+                #         'job_type': job_type,
+                #         'lease_action': lease_action,
+                #         'tuuid': lease.get('tuuid'),
+                #         'fuuid': fuuid,
+                #         'user_id': None,
+                #         'language': 'en_US',
+                #         'domain': Constantes.DOMAINE_GROS_FICHIERS,
+                #         'cuuids': None,
+                #         'metadata': None,
+                #         'mimetype': mimetype,
+                #         'version': version,  # Lease is the version information
+                #         'key': key,
+                #         'tmp_file': None,
+                #         'decrypted_metadata': None,
+                #         'media': lease.get('media'),
+                #         'file': image_file,
+                #     }
+                # else:
+                #     raise Exception(f"Unknown lease type {lease_action}, skipping")
 
                 await self.__intake_queue.put(info)
 
@@ -646,8 +670,10 @@ async def summarize_file(client: AsyncClient, job: FileInformation, model: str, 
     context_len = rag_configuration.get('context_len') or 4096
 
     job_type = job['job_type']
+    language = job['language']
+
     if job_type == CONST_JOB_SUMMARY_TEXT:
-        system_prompt, command_prompt = await format_text_prompt(context_len, job['mimetype'], tmp_file)
+        system_prompt, command_prompt = await format_text_prompt(language, context_len, job['mimetype'], tmp_file)
         LOGGER.debug(f"PROMPT (len:{len(system_prompt) + len(command_prompt)})\n{command_prompt}")
         response = await client.generate(
             model=model,
@@ -655,11 +681,11 @@ async def summarize_file(client: AsyncClient, job: FileInformation, model: str, 
             prompt=command_prompt,
             system=system_prompt,
             format=SummaryText.model_json_schema(),
-            options={"temperature": 0.0, "num_ctx": context_len}
+            options={"temperature": 0.0, "num_ctx": context_len, "num_predict": 1024}
         )
         summary = SummaryText.model_validate_json(response.response)
     elif job_type == CONST_JOB_SUMMARY_IMAGE:
-        system_prompt, command_prompt = await format_image_prompt()
+        system_prompt, command_prompt = await format_image_prompt(language)
         LOGGER.debug(f"PROMPT (len:{len(system_prompt) + len(command_prompt)})\n{command_prompt}")
         image_content = await asyncio.to_thread(tmp_file.read)
         response = await client.generate(
@@ -667,10 +693,11 @@ async def summarize_file(client: AsyncClient, job: FileInformation, model: str, 
             # prompt=system_prompt + "\n" + command_prompt,
             prompt=command_prompt,
             system=system_prompt,
-            options={"temperature": 0.0, "num_ctx": context_len},
+            format=SummaryText.model_json_schema(),
+            options={"temperature": 0.0, "num_ctx": context_len, "num_predict": 1024},
             images=[image_content]
         )
-        summary = SummaryText(summary=response.response, language=None, tags=None)
+        summary = SummaryText.model_validate_json(response.response)
     else:
         raise ValueError(f"Unsupported job type: {job_type}")
 
@@ -761,30 +788,47 @@ Provide a clear and direct response to the user's query, including inline citati
     return system_prompt, command_prompt, doc_ref
 
 
-async def format_image_prompt():
+async def format_image_prompt(language: str):
 
     system_prompt = """
 # Task
-Generate a detailed description of the image.
+Generate a detailed description of the image. 
+
+## Instructions
+
+* Generate a detailed description in the summary field.
+* Provide a list of tags, for exemple: landscape, daytime, tree, dog, people
+* Do not ask questions, just provide the information. This is not an interactive prompt.
+* Use the user language provided in the prompt to response.
+
 """
-    command_prompt = "Describe this image"
+    command_prompt = f"<UserProfile>user_language: {language}</UserProfile> Describe this image"
 
     return system_prompt, command_prompt
 
 
-async def format_text_prompt(context_len: int, mimetype: str, tmp_file: tempfile.NamedTemporaryFile) -> (str, str):
+async def format_text_prompt(language: str, context_len: int, mimetype: str, tmp_file: tempfile.NamedTemporaryFile) -> (str, str):
     system_prompt = """
 # Task
-Summarize the content of this document.
 
-* If the document is an invoice, simply summarize as: Invoice of company A, total amount:$123.45 due by 2024-05-06.
-* If the document is a contract, state summarize as: Contract between parties A, B and C on topic of contract.
-* If the document is an article, summarize by including the *title* and using 200 words or less. For example: *The new PDF* The new PDF is an enhanced format ...
+Summarize the content of this document. Use the language provided in the UserProfile tag.
+
+# Information required on all types
+
+* Summary in the user's language.
+* Create a comma-separated list of tags in the user's language. For example: pdf, invoice, article, 2024
+* Output in the user's own language, the user's language provided in the UserProfile tag. 
 * When possible, include the number of pages at the end of the summary.
 
-# Separate information required on all types
-Create a comma-separated list of tags, for example: pdf, invoice, article, 2024 
-Identify the language of the document and return the ISO-639 language code. For example fr_CA, en_US, etc.
+# Summary guide depending on document type
+
+Detect the type of document according to the content that was provided.
+
+* If the document is an invoice, summarize as: Invoice of company "INSERT COMPANY NAME", total amount:"INSERT AMOUNT" due by "INSERT DATE".
+* If the document is a contract, summarize as: Contract between parties "PARTY A", "PARTY B" and "PARTY C" on "TOPIC OF CONTRACT". Also mention contractual dates when possible.
+* If the document is an article, include the *title* and then a *summary* using between 100 and 250 words. 
+  For example: An article title. A new type of quantum state has been uncovered by scientists at a restaurant ...
+
 """
     context_chars = math.floor(2.5 * context_len)
 
@@ -806,7 +850,7 @@ Identify the language of the document and return the ISO-639 language code. For 
     except IndexError:
         pass  # Document fits in context
 
-    command_prompt = f"<document>{content}</document>"
+    command_prompt = f"<UserProfile>user_language: {language}, timezone: America/Toronto</UserProfile>\n\n<Document>{content}</Document>"
     tmp_file.seek(0)
 
     return system_prompt, command_prompt
