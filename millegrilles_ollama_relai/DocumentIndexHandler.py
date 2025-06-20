@@ -286,9 +286,9 @@ class DocumentIndexHandler:
                             self.__logger.debug(f"Downloaded {filesize} bytes for file {filename}")
                         except* asyncio.CancelledError:
                             raise Exception(f"Error downloading fuuid {fuuid}, will retry")
-                    except nacl.exceptions.RuntimeError:
+                    except nacl.exceptions.RuntimeError as e:
                         tmp_file.close()
-                        self.__logger.exception(f"Error decrypting fuuid {fuuid}, CANCELLING")
+                        self.__logger.error(f"Error decrypting fuuid {fuuid}, CANCELLING: {e}")
                         await self.__cancel_job(job)
                         continue
                     except:
