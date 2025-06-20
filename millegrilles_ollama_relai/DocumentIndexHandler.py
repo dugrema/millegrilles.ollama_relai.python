@@ -245,6 +245,7 @@ class DocumentIndexHandler:
             # Wait for jobs
             job = await self.__intake_queue.get()
             if job is None:
+                self.__logger.info("Stopping intake thread (None job received)")
                 return  # Stopping
 
             job_type = job['job_type']
@@ -265,6 +266,8 @@ class DocumentIndexHandler:
                 fuuid = job.get('fuuid') or version['fuuid']
             except (TypeError, KeyError, UnicodeDecodeError) as e:
                 self.__logger.warning(f"__intake_thread Error getting value for tuuid: {job.get('tuuid')} / fuuid: {job.get('fuuid')}: {str(e)}, skipping")
+            except:
+                self.__logger.exception("Unhandled exception, quitting intake_thread")
             else:
                 if job_type and fuuid:  # Job to do, download file
                     tmp_file = tempfile.NamedTemporaryFile(mode='wb+')
