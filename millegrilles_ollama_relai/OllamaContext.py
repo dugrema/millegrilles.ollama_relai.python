@@ -18,6 +18,7 @@ class ChatConfiguration(TypedDict):
 class RagConfiguration(TypedDict):
     model_embedding_name: Optional[str]
     model_query_name: Optional[str]
+    model_vision_name: Optional[str]
     context_len: Optional[int]
     document_chunk_len: Optional[int]
     document_overlap_len: Optional[int]

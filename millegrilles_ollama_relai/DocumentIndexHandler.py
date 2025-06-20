@@ -8,9 +8,9 @@ import math
 
 from asyncio import TaskGroup
 from typing import Optional, TypedDict
+from pydantic import Field
 
 from ollama import AsyncClient
-from pydantic import Field
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from langchain_core.retrievers import RetrieverLike, BaseRetriever
@@ -23,12 +23,13 @@ from pypdf.errors import PdfStreamError
 from millegrilles_messages.chiffrage.DechiffrageUtils import dechiffrer_document_secrete, dechiffrer_bytes_secrete
 from millegrilles_messages.chiffrage.Mgs4 import chiffrer_mgs4_bytes_secrete
 from millegrilles_messages.messages import Constantes
-
 from millegrilles_messages.messages.MessagesModule import MessageWrapper
 from millegrilles_messages.Filehost import FilehostConnection
+
 from millegrilles_ollama_relai.OllamaContext import OllamaContext, RagConfiguration
 from millegrilles_ollama_relai.OllamaInstanceManager import OllamaInstance, model_name_to_id, OllamaInstanceManager
 from millegrilles_ollama_relai.Util import decode_base64_nopad
+from millegrilles_ollama_relai.Structs import SummaryText
 
 LOGGER = logging.getLogger(__name__)
 
@@ -393,14 +394,22 @@ class DocumentIndexHandler:
                 await self.__context.wait(5)
 
     async def __run_summarize_file(self, job: FileInformation, tmp_file: tempfile.NamedTemporaryFile):
+        llm_configuration = self.__context.chat_configuration
         rag_configuration = self.__context.rag_configuration
         if rag_configuration is None:
             raise Exception("No RAG configuration provided - configure it with MilleGrilles AiChat")
 
-        embedding_model = rag_configuration['model_query_name']
-        instance = self.__ollama_instances.pick_instance_for_model(embedding_model)
+        job_type = job['job_type']
+        if job_type in [CONST_JOB_RAG, CONST_JOB_SUMMARY_TEXT]:
+            model = rag_configuration.get('model_query_name') or llm_configuration['default_model']
+        elif job_type == CONST_JOB_SUMMARY_IMAGE:
+            model = rag_configuration.get('model_vision_name') or rag_configuration.get('model_query_name') or llm_configuration['default_model']
+        else:
+            raise ValueError(f'Unsupported job type: {job_type}')
+
+        instance = self.__ollama_instances.pick_instance_for_model(model)
         if instance is None:
-            raise Exception(f'Unsupported model: {embedding_model}')
+            raise Exception(f'Unsupported model: {model}')
 
         encryption_key = job['key']
         secret_key: bytes = decode_base64_nopad(encryption_key['cle_secrete_base64'])
@@ -408,17 +417,26 @@ class DocumentIndexHandler:
 
         async with instance.semaphore:
             client = instance.get_async_client(self.__context.configuration)
-            result = await summarize_file(client, job, rag_configuration, tmp_file)
+            summary = await summarize_file(client, job, model, rag_configuration, tmp_file)
 
         # Encrypt result
-        cleartext = json.dumps({"comment": result})
-        cipher, encrypted_response = chiffrer_mgs4_bytes_secrete(secret_key, cleartext)
-        encrypted_response['cle_id'] = key_id
+        cleartext_summary = json.dumps({"comment": summary.summary})
+        cipher, encrypted_summary = chiffrer_mgs4_bytes_secrete(secret_key, cleartext_summary)
+        encrypted_summary['cle_id'] = key_id
+
+        if summary.tags:
+            cleartext_tags = json.dumps({"tags": summary.tags})
+            cipher, encrypted_tags = chiffrer_mgs4_bytes_secrete(secret_key, cleartext_tags)
+            encrypted_tags['cle_id'] = key_id
+        else:
+            encrypted_tags = None
 
         # Send result as new comment for file
         summary_command = {
             'fuuid': job['version']['fuuid'],
-            'comment': encrypted_response
+            'comment': encrypted_summary,
+            'file_language': summary.language,
+            'tags': encrypted_tags,
         }
         producer = await self.__context.get_producer()
         for i in range(0, 5):
@@ -622,39 +640,41 @@ def index_pdf_file(vector_store: VectorStore, tuuid: str, filename: str, cuuids:
             chunk.metadata['cuuids'] = ','.join(cuuids)
     vector_store.add_documents(list(chunks))
 
-async def summarize_file(client: AsyncClient, job: FileInformation, rag_configuration: RagConfiguration,
-                         tmp_file: tempfile.NamedTemporaryFile) -> str:
-    context_len = rag_configuration.get('context_len') or 4096
 
-    query_model = rag_configuration['model_query_name']
+async def summarize_file(client: AsyncClient, job: FileInformation, model: str, rag_configuration: RagConfiguration,
+                         tmp_file: tempfile.NamedTemporaryFile) -> SummaryText:
+    context_len = rag_configuration.get('context_len') or 4096
 
     job_type = job['job_type']
     if job_type == CONST_JOB_SUMMARY_TEXT:
         system_prompt, command_prompt = await format_text_prompt(context_len, job['mimetype'], tmp_file)
         LOGGER.debug(f"PROMPT (len:{len(system_prompt) + len(command_prompt)})\n{command_prompt}")
         response = await client.generate(
-            model=query_model,
+            model=model,
             # prompt=system_prompt + "\n" + command_prompt,
             prompt=command_prompt,
             system=system_prompt,
+            format=SummaryText.model_json_schema(),
             options={"temperature": 0.0, "num_ctx": context_len}
         )
+        summary = SummaryText.model_validate_json(response.response)
     elif job_type == CONST_JOB_SUMMARY_IMAGE:
         system_prompt, command_prompt = await format_image_prompt()
         LOGGER.debug(f"PROMPT (len:{len(system_prompt) + len(command_prompt)})\n{command_prompt}")
-        image_content = tmp_file.read()
+        image_content = await asyncio.to_thread(tmp_file.read)
         response = await client.generate(
-            model=query_model,
+            model=model,
             # prompt=system_prompt + "\n" + command_prompt,
             prompt=command_prompt,
             system=system_prompt,
             options={"temperature": 0.0, "num_ctx": context_len},
             images=[image_content]
         )
+        summary = SummaryText(summary=response.response, language=None, tags=None)
     else:
         raise ValueError(f"Unsupported job type: {job_type}")
 
-    return response.response
+    return summary
 
 
 class FilteredCuuidsRetriever(BaseRetriever):
@@ -751,7 +771,8 @@ Generate a detailed description of the image.
 
     return system_prompt, command_prompt
 
-async def format_text_prompt(context_len: int, mimetype: str, tmp_file: tempfile.NamedTemporaryFile):
+
+async def format_text_prompt(context_len: int, mimetype: str, tmp_file: tempfile.NamedTemporaryFile) -> (str, str):
     system_prompt = """
 # Task
 Summarize the content of this document.
@@ -769,18 +790,21 @@ Identify the language of the document and return the ISO-639 language code. For 
 
     if mimetype == 'application/pdf':
         loader = PyPDFLoader(tmp_file.name, mode="single")
-        document_list = loader.load()
-        content = document_list[0]
-        try:
-            content = content.page_content[0:context_chars]
-        except IndexError:
-            pass  # Document fits in context
+        document_list = await asyncio.to_thread(loader.load)
+        content = document_list[0].page_content
 
     elif mimetype.startswith('text/'):
-        content = tmp_file.read(context_chars).decode('utf-8')
+        content = await asyncio.to_thread(tmp_file.read, context_chars)
+        content = content.decode('utf-8')
 
     else:
         raise ValueError(f"Unsupported document mimetype: {mimetype}")
+
+    # Trim content
+    try:
+        content = content[0: context_chars]
+    except IndexError:
+        pass  # Document fits in context
 
     command_prompt = f"<document>{content}</document>"
     tmp_file.seek(0)
