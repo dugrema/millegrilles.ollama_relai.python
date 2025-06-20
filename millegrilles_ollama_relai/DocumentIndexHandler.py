@@ -268,6 +268,7 @@ class DocumentIndexHandler:
                 self.__logger.warning(f"__intake_thread Error getting value for tuuid: {job.get('tuuid')} / fuuid: {job.get('fuuid')}: {str(e)}, skipping")
             except:
                 self.__logger.exception("Unhandled exception, quitting intake_thread")
+                self.__context.stop()
             else:
                 if job_type and fuuid:  # Job to do, download file
                     tmp_file = tempfile.NamedTemporaryFile(mode='wb+')
