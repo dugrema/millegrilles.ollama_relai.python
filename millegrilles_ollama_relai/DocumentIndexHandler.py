@@ -311,21 +311,20 @@ class DocumentIndexHandler:
 
     async def __cancel_job(self, job: FileInformation):
         lease_action = job['lease_action']
-        producer = await self.__context.get_producer()
-        if lease_action == CONST_ACTION_SUMMARY:
-            tuuid = job['tuuid']
-            try:
+        try:
+            producer = await self.__context.get_producer()
+            if lease_action == CONST_ACTION_SUMMARY:
+                tuuid = job['tuuid']
                 fuuid = job['version']['fuuid']
-            except KeyError:
-                self.__logger.exception("Unable to cancel job: %s" % job)
-                return
-            command = {'tuuid': tuuid, 'fuuid': fuuid}
-            await producer.command(command, Constantes.DOMAINE_GROS_FICHIERS, "fileSummary",
-                                   Constantes.SECURITE_PROTEGE, timeout=45)
-        elif lease_action == CONST_ACTION_RAG:
-            command = {"tuuid": job['tuuid'], "user_id": job['user_id']}
-            await producer.command(command, Constantes.DOMAINE_GROS_FICHIERS, "confirmRag",
-                                   Constantes.SECURITE_PROTEGE, timeout=45)
+                command = {'tuuid': tuuid, 'fuuid': fuuid}
+                await producer.command(command, Constantes.DOMAINE_GROS_FICHIERS, "fileSummary",
+                                       Constantes.SECURITE_PROTEGE, timeout=45)
+            elif lease_action == CONST_ACTION_RAG:
+                command = {"tuuid": job['tuuid'], "user_id": job['user_id']}
+                await producer.command(command, Constantes.DOMAINE_GROS_FICHIERS, "confirmRag",
+                                       Constantes.SECURITE_PROTEGE, timeout=45)
+        except:
+            self.__logger.exception("Error cancelling job\n %s" % job)
 
     async def __index_thread(self):
         while self.__context.stopping is False:
