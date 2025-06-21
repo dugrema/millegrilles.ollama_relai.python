@@ -12,7 +12,7 @@ from typing import Optional, TypedDict
 import nacl.exceptions
 from pydantic import Field, ValidationError
 
-from ollama import AsyncClient
+from ollama import AsyncClient, ResponseError
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from langchain_core.retrievers import RetrieverLike, BaseRetriever
@@ -372,7 +372,7 @@ class DocumentIndexHandler:
                             pass
                         else:
                             self.__logger.warning(f"RAG/Summary job cancelled: {e}")
-                except (FatalSummaryException, ValidationError, UnicodeDecodeError) as e:
+                except (FatalSummaryException, ValidationError, ResponseError, UnicodeDecodeError) as e:
                     self.__logger.error(f"Error handling file tuuid:{tuuid}/fuuid:{fuuid}, CANCELLING: {e}")
                     await self.__cancel_job(job)
                 except:
