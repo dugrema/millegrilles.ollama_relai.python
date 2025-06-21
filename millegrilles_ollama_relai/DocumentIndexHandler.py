@@ -455,6 +455,7 @@ class DocumentIndexHandler:
             # Make a few attempts to generate valid JSON, increase the temperature each time to vary the result.
             temperature = 0.0
             for i in range(0, 2):
+                tmp_file.seek(0)  # Ensure file pointer is reset
                 try:
                     client = instance.get_async_client(self.__context.configuration)
                     summary = await summarize_file(client, job, model, tmp_file, context_len=context_len, temperature=temperature)
@@ -464,6 +465,7 @@ class DocumentIndexHandler:
                     temperature += 0.3
             else:
                 # Unable to get a structured JSON summary output, revert to string output
+                tmp_file.seek(0)  # Ensure file pointer is reset
                 summary = await summarize_file(client, job, model, tmp_file,
                                                context_len=context_len, temperature=0.0, noformat=True)
                 # raise FatalSummaryException(f'Unable to get a valid JSON output for file tuuid:{job.get('tuuid')}/fuuid:{job.get('fuuid')}')
