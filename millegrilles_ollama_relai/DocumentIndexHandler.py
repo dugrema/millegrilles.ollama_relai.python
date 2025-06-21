@@ -372,7 +372,7 @@ class DocumentIndexHandler:
                             pass
                         else:
                             self.__logger.warning(f"RAG/Summary job cancelled: {e}")
-                except (ValidationError, UnicodeDecodeError) as e:
+                except (FatalSummaryException, ValidationError, UnicodeDecodeError) as e:
                     self.__logger.error(f"Error handling file tuuid:{tuuid}/fuuid:{fuuid}, CANCELLING: {e}")
                     await self.__cancel_job(job)
                 except:
@@ -452,8 +452,21 @@ class DocumentIndexHandler:
         key_id = encryption_key['cle_id']
 
         async with instance.semaphore:
-            client = instance.get_async_client(self.__context.configuration)
-            summary = await summarize_file(client, job, model, tmp_file, context_len)
+            # Make a few attempts to generate valid JSON, increase the temperature each time to vary the result.
+            temperature = 0.0
+            for i in range(0, 2):
+                try:
+                    client = instance.get_async_client(self.__context.configuration)
+                    summary = await summarize_file(client, job, model, tmp_file, context_len=context_len, temperature=temperature)
+                    break
+                except ValidationError as e:
+                    self.__logger.warning(f"JSON validation error on generate response for file tuuid:{job.get('tuuid')}/fuuid:{job.get('fuuid')} (temperature: {temperature}): {e}")
+                    temperature += 0.3
+            else:
+                # Unable to get a structured JSON summary output, revert to string output
+                summary = await summarize_file(client, job, model, tmp_file,
+                                               context_len=context_len, temperature=0.0, noformat=True)
+                # raise FatalSummaryException(f'Unable to get a valid JSON output for file tuuid:{job.get('tuuid')}/fuuid:{job.get('fuuid')}')
 
         # Encrypt result
         cleartext_summary = json.dumps({"comment": summary.summary})
@@ -650,9 +663,14 @@ def index_pdf_file(vector_store: VectorStore, tuuid: str, filename: str, cuuids:
 
 
 async def summarize_file(client: AsyncClient, job: FileInformation, model: str,
-                         tmp_file: tempfile.NamedTemporaryFile, context_len=4096) -> SummaryText:
+                         tmp_file: tempfile.NamedTemporaryFile, context_len=4096, temperature=0.0, noformat=False) -> SummaryText:
     job_type = job['job_type']
     language = job['language']
+
+    if noformat:
+        format = None
+    else:
+        format = SummaryText.model_json_schema()
 
     if job_type == CONST_JOB_SUMMARY_TEXT:
         system_prompt, command_prompt = await format_text_prompt(language, context_len, job['mimetype'], tmp_file)
@@ -662,10 +680,9 @@ async def summarize_file(client: AsyncClient, job: FileInformation, model: str,
             # prompt=system_prompt + "\n" + command_prompt,
             prompt=command_prompt,
             system=system_prompt,
-            format=SummaryText.model_json_schema(),
-            options={"temperature": 0.0, "num_ctx": context_len, "num_predict": 1024}
+            format=format,
+            options={"temperature": temperature, "num_ctx": context_len, "num_predict": 1024}
         )
-        summary = SummaryText.model_validate_json(response.response)
     elif job_type == CONST_JOB_SUMMARY_IMAGE:
         system_prompt, command_prompt = await format_image_prompt(language)
         LOGGER.debug(f"PROMPT (len:{len(system_prompt) + len(command_prompt)})\n{command_prompt}")
@@ -675,13 +692,17 @@ async def summarize_file(client: AsyncClient, job: FileInformation, model: str,
             # prompt=system_prompt + "\n" + command_prompt,
             prompt=command_prompt,
             system=system_prompt,
-            format=SummaryText.model_json_schema(),
-            options={"temperature": 0.0, "num_ctx": context_len, "num_predict": 1024},
+            format=format,
+            options={"temperature": temperature, "num_ctx": context_len, "num_predict": 1024},
             images=[image_content]
         )
-        summary = SummaryText.model_validate_json(response.response)
     else:
         raise ValueError(f"Unsupported job type: {job_type}")
+
+    if noformat:
+        summary = SummaryText(summary=response.response, tags=None)
+    else:
+        summary = SummaryText.model_validate_json(response.response)
 
     return summary
 
@@ -836,3 +857,7 @@ Detect the type of document according to the content that was provided.
     tmp_file.seek(0)
 
     return system_prompt, command_prompt
+
+
+class FatalSummaryException(Exception):
+    pass
