@@ -181,6 +181,10 @@ class DocumentIndexHandler:
         return None  # Already replied
 
     async def run(self):
+        if not self.__context.configuration.rag_active and not self.__context.configuration.summary_active:
+            return  # Nothing to do, abort thread
+
+        self.__logger.info("DocumentIndexHandler thread starting")
         async with TaskGroup() as group:
             group.create_task(self.__query_thread())
             group.create_task(self.__intake_thread())
@@ -209,25 +213,37 @@ class DocumentIndexHandler:
             self.__event_fetch_jobs.clear()
 
             if self.__intake_queue.qsize() == 0:
-                try:
-                    # Ensure that the RAG model is available locally
-                    rag_configuration = self.__context.rag_configuration
-                    embedding_model = rag_configuration['model_embedding_name']
-                    instance = self.__ollama_instances.pick_instance_for_model(embedding_model)
-                except (TypeError, KeyError) as e:
-                    self.__logger.debug(f"RAG configuration not initialized yet: {e}")
-                else:
-                    if instance is not None:
-                        # Try to fetch more items
-                        self.__logger.debug("Triggering fetch of new batch of files for RAG/Summary (low/empty intake queue)")
-                        try:
-                            await self.__query_batch_rag()
-                        except asyncio.TimeoutError:
-                            self.__logger.warning("Timeout querying for files to index")
-                        except (AttributeError, KeyError, ValueError) as e:
-                            self.__logger.warning("Error loading file or filehost configuration: %s" % e)
-                    else:
-                        self.__logger.info(f"RAG embedding model {embedding_model} not available locally, will retry later")
+                lease_actions: list[str] = list()
+
+                if self.__context.configuration.rag_active:
+                    try:
+                        # Ensure that the RAG model is available locally
+                        rag_configuration = self.__context.rag_configuration
+                        embedding_model = rag_configuration['model_embedding_name']
+                        _instance = self.__ollama_instances.pick_instance_for_model(embedding_model)
+                        lease_actions.append(CONST_ACTION_RAG)
+                    except (TypeError, KeyError) as e:
+                        self.__logger.debug(f"RAG configuration not initialized yet: {e}")
+
+                if self.__context.configuration.summary_active:
+                    try:
+                        # Ensure that the summary model is available locally
+                        rag_configuration = self.__context.rag_configuration
+                        embedding_model = rag_configuration['model_query_name']
+                        _instance = self.__ollama_instances.pick_instance_for_model(embedding_model)
+                        lease_actions.append(CONST_ACTION_SUMMARY)
+                    except (TypeError, KeyError) as e:
+                        self.__logger.debug(f"RAG configuration not initialized yet: {e}")
+
+                for lease_action in lease_actions:
+                    # Try to fetch more items
+                    self.__logger.debug("Triggering fetch of new batch of files for RAG/Summary (low/empty intake queue)")
+                    try:
+                        await self.__query_batch(lease_action)
+                    except asyncio.TimeoutError:
+                        self.__logger.warning("Timeout querying for files to index")
+                    except (AttributeError, KeyError, ValueError) as e:
+                        self.__logger.warning("Error loading file or filehost configuration: %s" % e)
 
             await self.__event_fetch_jobs.wait()
 
@@ -418,10 +434,12 @@ class DocumentIndexHandler:
             raise Exception("No RAG configuration provided - configure it with MilleGrilles AiChat")
 
         job_type = job['job_type']
+        context_len = rag_configuration.get('context_len') or 4096
         if job_type in [CONST_JOB_RAG, CONST_JOB_SUMMARY_TEXT]:
             model = rag_configuration.get('model_query_name') or llm_configuration['default_model']
         elif job_type == CONST_JOB_SUMMARY_IMAGE:
             model = rag_configuration.get('model_vision_name') or rag_configuration.get('model_query_name') or llm_configuration['default_model']
+            context_len = 4096  # Force short context for vision model to fit  # TODO Add Context_len for vision
         else:
             raise ValueError(f'Unsupported job type: {job_type}')
 
@@ -435,7 +453,7 @@ class DocumentIndexHandler:
 
         async with instance.semaphore:
             client = instance.get_async_client(self.__context.configuration)
-            summary = await summarize_file(client, job, model, rag_configuration, tmp_file)
+            summary = await summarize_file(client, job, model, tmp_file, context_len)
 
         # Encrypt result
         cleartext_summary = json.dumps({"comment": summary.summary})
@@ -468,7 +486,7 @@ class DocumentIndexHandler:
                 await self.__context.wait(5)
 
 
-    async def __query_batch_rag(self):
+    async def __query_batch(self, lease_action:str):
         producer = await self.__context.get_producer()
 
         # Calculate batch size from space left in processing queue
@@ -483,148 +501,98 @@ class DocumentIndexHandler:
             await self.__context.wait(5)
             filehost_id = self.__context.filehost.filehost_id
 
-        for lease_action in [CONST_ACTION_SUMMARY, CONST_ACTION_RAG]:
-            batch_size = self.__intake_queue.maxsize - self.__intake_queue.qsize()
+        batch_size = self.__intake_queue.maxsize - self.__intake_queue.qsize()
 
-            # Get the batch
-            command = {"batch_size": batch_size, "filehost_id": filehost_id}
+        # Get the batch
+        command = {"batch_size": batch_size, "filehost_id": filehost_id}
+        try:
+            response = await producer.command(command, Constantes.DOMAINE_GROS_FICHIERS, lease_action,
+                                              Constantes.SECURITE_PROTEGE, timeout=60)
+        except asyncio.TimeoutError:
+            self.__logger.warning(f"Timeout on {lease_action}, will retry")
+            return
+
+        parsed = response.parsed
+        if parsed['ok'] is not True:
+            self.__logger.warning("Error retrieving batch of files for RAG: %s" % parsed)
+        elif parsed.get('code') == 1:
+            self.__logger.debug("No more files to process for RAG")
+            return
+
+        # Parse batch file and insert on queue per item
+        leases = parsed['leases']
+        secret_keys: list = parsed['secret_keys']
+
+        self.__logger.debug(f"Received batch of files {len(leases)} for RAG indexing")
+
+        for lease in leases:
+            metadata = lease.get('metadata')
+            version = lease.get('version')
+            cuuids = lease.get('cuuids')
+            fuuid: Optional[str] = None
+
+            cle_id = None
+            mimetype = lease.get('mimetype')
+            if version:
+                fuuid = version['fuuid']
+                cle_id = version.get('cle_id')
+                mimetype = mimetype or version.get('mimetype')
+
+            if metadata and not cle_id:
+                cle_id = cle_id or metadata.get('cle_id') or metadata.get('ref_hachage_bytes')
+            cle_id = cle_id or fuuid
+
             try:
-                response = await producer.command(command, Constantes.DOMAINE_GROS_FICHIERS, lease_action,
-                                                  Constantes.SECURITE_PROTEGE, timeout=60)
-            except asyncio.TimeoutError:
-                self.__logger.warning(f"Timeout on {lease_action}, will retry")
-                return
+                key = [k for k in secret_keys if k['cle_id'] == cle_id].pop()
+            except IndexError:
+                self.__logger.warning(f"Missing key for fuuid {fuuid}, skipping")
+                key = None
 
-            parsed = response.parsed
-            if parsed['ok'] is not True:
-                self.__logger.warning("Error retrieving batch of files for RAG: %s" % parsed)
-            elif parsed.get('code') == 1:
-                self.__logger.debug("No more files to process for RAG")
-                return
-
-            # Parse batch file and insert on queue per item
-            leases = parsed['leases']
-            secret_keys: list = parsed['secret_keys']
-
-            self.__logger.debug(f"Received batch of files {len(leases)} for RAG indexing")
-
-            for lease in leases:
-                metadata = lease.get('metadata')
-                version = lease.get('version')
-                cuuids = lease.get('cuuids')
-                fuuid: Optional[str] = None
-
-                cle_id = None
-                mimetype = lease.get('mimetype')
-                if version:
-                    fuuid = version['fuuid']
-                    cle_id = version.get('cle_id')
-                    mimetype = mimetype or version.get('mimetype')
-
-                if metadata and not cle_id:
-                    cle_id = cle_id or metadata.get('cle_id') or metadata.get('ref_hachage_bytes')
-                cle_id = cle_id or fuuid
-
-                try:
-                    key = [k for k in secret_keys if k['cle_id'] == cle_id].pop()
-                except IndexError:
-                    self.__logger.warning(f"Missing key for fuuid {fuuid}, skipping")
-                    key = None
-
-                image_file = None
-                if lease_action == CONST_ACTION_RAG:
-                    if mimetype == 'application/pdf' or mimetype.startswith('text/'):
-                        job_type = CONST_JOB_RAG
-                    else:
-                        job_type = None  # Nothing to do
-                elif lease_action == CONST_ACTION_SUMMARY:
-                    media = lease.get('media')
-                    if mimetype == 'application/pdf' or mimetype.startswith('text/'):
-                        job_type = CONST_JOB_SUMMARY_TEXT
-                    elif mimetype.startswith('image/'):
-                        job_type = CONST_JOB_SUMMARY_IMAGE
-                        # Check to find a webp fuuid, will be smaller and easier to digest
-                        try:
-                            images = media['images']
-                            webp_img = [m for m in images.keys() if m.startswith('image/webp')].pop()
-                            image_file = images[webp_img]
-                            image_file['fuuid'] = image_file['hachage']
-                        except (AttributeError, IndexError, TypeError):
-                            pass
-                    else:
-                        job_type = None
+            image_file = None
+            if lease_action == CONST_ACTION_RAG:
+                if mimetype == 'application/pdf' or mimetype.startswith('text/'):
+                    job_type = CONST_JOB_RAG
+                else:
+                    job_type = None  # Nothing to do
+            elif lease_action == CONST_ACTION_SUMMARY:
+                media = lease.get('media')
+                if mimetype == 'application/pdf' or mimetype.startswith('text/'):
+                    job_type = CONST_JOB_SUMMARY_TEXT
+                elif mimetype.startswith('image/'):
+                    job_type = CONST_JOB_SUMMARY_IMAGE
+                    # Check to find a webp fuuid, will be smaller and easier to digest
+                    try:
+                        images = media['images']
+                        webp_img = [m for m in images.keys() if m.startswith('image/webp')].pop()
+                        image_file = images[webp_img]
+                        image_file['fuuid'] = image_file['hachage']
+                    except (AttributeError, IndexError, TypeError):
+                        pass
                 else:
                     job_type = None
+            else:
+                job_type = None
 
-                info: FileInformation = {
-                    'job_type': job_type,
-                    'lease_action': lease_action,
-                    'tuuid': lease.get('tuuid'),
-                    'fuuid': lease.get('fuuid'),
-                    'user_id': lease['user_id'],
-                    'language': 'en_US',
-                    'domain': Constantes.DOMAINE_GROS_FICHIERS,
-                    'cuuids': cuuids,
-                    'metadata': metadata,
-                    'mimetype': lease.get('mimetype'),
-                    'version': lease.get('version'),
-                    'key': key,
-                    'tmp_file': None,
-                    'decrypted_metadata': None,
-                    'media': lease.get('media'),
-                    'file': image_file,
-                }
-                # elif lease_action == CONST_ACTION_SUMMARY:
-                #     version = lease['version']
-                #     fuuid = version['fuuid']
-                #     cle_id = version.get('cle_id') or version.get('ref_hachage_bytes') or fuuid
-                #
-                #     try:
-                #         key = [k for k in secret_keys if k['cle_id'] == cle_id].pop()
-                #     except IndexError:
-                #         self.__logger.warning(f"Missing key for fuuid {fuuid}, skipping")
-                #         key = None
-                #
-                #     mimetype = version['mimetype']
-                #     media = lease.get('media')
-                #     image_file = None
-                #     if mimetype == 'application/pdf' or mimetype.startswith('text/'):
-                #         job_type = CONST_JOB_SUMMARY_TEXT
-                #     elif mimetype.startswith('image/'):
-                #         job_type = CONST_JOB_SUMMARY_IMAGE
-                #         # Check to find a webp fuuid, will be smaller and easier to digest
-                #         try:
-                #             images = media['images']
-                #             webp_img = [m for m in images.keys() if m.startswith('image/webp')].pop()
-                #             image_file = images[webp_img]
-                #             image_file['fuuid'] = image_file['hachage']
-                #         except (AttributeError, IndexError, TypeError):
-                #             pass
-                #     else:
-                #         job_type = None
-                #
-                #     info: FileInformation = {
-                #         'job_type': job_type,
-                #         'lease_action': lease_action,
-                #         'tuuid': lease.get('tuuid'),
-                #         'fuuid': fuuid,
-                #         'user_id': None,
-                #         'language': 'en_US',
-                #         'domain': Constantes.DOMAINE_GROS_FICHIERS,
-                #         'cuuids': None,
-                #         'metadata': None,
-                #         'mimetype': mimetype,
-                #         'version': version,  # Lease is the version information
-                #         'key': key,
-                #         'tmp_file': None,
-                #         'decrypted_metadata': None,
-                #         'media': lease.get('media'),
-                #         'file': image_file,
-                #     }
-                # else:
-                #     raise Exception(f"Unknown lease type {lease_action}, skipping")
+            info: FileInformation = {
+                'job_type': job_type,
+                'lease_action': lease_action,
+                'tuuid': lease.get('tuuid'),
+                'fuuid': lease.get('fuuid'),
+                'user_id': lease['user_id'],
+                'language': 'en_US',
+                'domain': Constantes.DOMAINE_GROS_FICHIERS,
+                'cuuids': cuuids,
+                'metadata': metadata,
+                'mimetype': lease.get('mimetype'),
+                'version': lease.get('version'),
+                'key': key,
+                'tmp_file': None,
+                'decrypted_metadata': None,
+                'media': lease.get('media'),
+                'file': image_file,
+            }
 
-                await self.__intake_queue.put(info)
+            await self.__intake_queue.put(info)
 
         pass
 
@@ -681,10 +649,8 @@ def index_pdf_file(vector_store: VectorStore, tuuid: str, filename: str, cuuids:
     vector_store.add_documents(list(chunks))
 
 
-async def summarize_file(client: AsyncClient, job: FileInformation, model: str, rag_configuration: RagConfiguration,
-                         tmp_file: tempfile.NamedTemporaryFile) -> SummaryText:
-    context_len = rag_configuration.get('context_len') or 4096
-
+async def summarize_file(client: AsyncClient, job: FileInformation, model: str,
+                         tmp_file: tempfile.NamedTemporaryFile, context_len=4096) -> SummaryText:
     job_type = job['job_type']
     language = job['language']
 

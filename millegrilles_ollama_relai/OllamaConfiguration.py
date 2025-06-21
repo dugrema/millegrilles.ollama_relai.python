@@ -32,6 +32,11 @@ def _parse_command_line():
         help="Activate RAG (Resource Augmented Generation) with persistent local vector database"
     )
 
+    parser.add_argument(
+        '--summary', action="store_true", required=False,
+        help="Activate summary generation for file content"
+    )
+
     args = parser.parse_args()
     __adjust_logging(args)
     return args
@@ -46,6 +51,7 @@ class OllamaConfiguration(MilleGrillesBusConfiguration):
         self.dir_rag = '/var/opt/millegrilles/rag'
         self.ollama_url = OllamaConstants.DEFAULT_OLLAMA_URL
         self.rag_active = False
+        self.summary_active = False
 
     def parse_config(self):
         super().parse_config()
@@ -56,6 +62,7 @@ class OllamaConfiguration(MilleGrillesBusConfiguration):
 
     def __set_args(self, args: argparse.Namespace):
         self.rag_active = args.rag or False
+        self.summary_active = args.summary or False
 
     @staticmethod
     def load():
