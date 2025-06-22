@@ -215,6 +215,16 @@ class DocumentIndexHandler:
             if self.__intake_queue.qsize() == 0:
                 lease_actions: list[str] = list()
 
+                if self.__context.configuration.summary_active:
+                    try:
+                        # Ensure that the summary model is available locally
+                        rag_configuration = self.__context.rag_configuration
+                        embedding_model = rag_configuration['model_query_name']
+                        _instance = self.__ollama_instances.pick_instance_for_model(embedding_model)
+                        lease_actions.append(CONST_ACTION_SUMMARY)
+                    except (TypeError, KeyError) as e:
+                        self.__logger.debug(f"RAG configuration not initialized yet: {e}")
+
                 if self.__context.configuration.rag_active:
                     try:
                         # Ensure that the RAG model is available locally
@@ -225,15 +235,6 @@ class DocumentIndexHandler:
                     except (TypeError, KeyError) as e:
                         self.__logger.debug(f"RAG configuration not initialized yet: {e}")
 
-                if self.__context.configuration.summary_active:
-                    try:
-                        # Ensure that the summary model is available locally
-                        rag_configuration = self.__context.rag_configuration
-                        embedding_model = rag_configuration['model_query_name']
-                        _instance = self.__ollama_instances.pick_instance_for_model(embedding_model)
-                        lease_actions.append(CONST_ACTION_SUMMARY)
-                    except (TypeError, KeyError) as e:
-                        self.__logger.debug(f"RAG configuration not initialized yet: {e}")
 
                 for lease_action in lease_actions:
                     # Try to fetch more items
