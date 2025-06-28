@@ -539,14 +539,14 @@ class DocumentIndexHandler:
         if parsed['ok'] is not True:
             self.__logger.warning("Error retrieving batch of files: %s" % parsed)
         elif parsed.get('code') == 1:
-            self.__logger.debug("No more files to process")
+            self.__logger.debug(f"No more files to process for {lease_action} on filehost_id {filehost_id}")
             return
 
         # Parse batch file and insert on queue per item
         leases = parsed['leases']
         secret_keys: list = parsed['secret_keys']
 
-        self.__logger.debug(f"Received batch of files {len(leases)} for indexing or summary")
+        self.__logger.debug(f"Received batch of {len(leases)} files for {lease_action} from filehost_id:{filehost_id}")
 
         for lease in leases:
             metadata = lease.get('metadata')
