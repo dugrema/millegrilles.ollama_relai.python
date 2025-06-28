@@ -298,19 +298,33 @@ class DocumentIndexHandler:
             else:
                 if job_type and fuuid:  # Job to do, download file
                     tmp_file = tempfile.NamedTemporaryFile(mode='wb+')
+
                     file_to_download = job.get('file')
                     try:
+                        key = job['key']
+
                         # Combine version and key to ensure legacy decryption info is available
                         if file_to_download is None:
+                            # This is a standard file, use legacy key fallback approach
                             file_to_download = version.copy()
-                        # info_decryption.update(job['key'])
-                        key = job['key']
-                        file_to_download['format'] = file_to_download.get('format') or key.get('format') or 'mgs4'  # Default format
-                        nonce = file_to_download.get('nonce') or key.get('nonce')
-                        if nonce is None:
-                            header = file_to_download.get('header') or key.get('header')
-                            nonce = header[1:]
+                            nonce = file_to_download.get('nonce') or key.get('nonce')
+                            if nonce is None:
+                                header = file_to_download.get('header') or key.get('header')
+                                nonce = header[1:]
+                        else:
+                            # This is an attached/generated file, e.g. media
+                            try:
+                                nonce = file_to_download['nonce']
+                            except KeyError:
+                                nonce = file_to_download['header'][1:]
+
+                        # Override the nonce to ensure the proper value is used
                         file_to_download['nonce'] = nonce
+
+                        # info_decryption.update(job['key'])
+                        file_to_download['format'] = file_to_download.get('format') or key.get('format') or 'mgs4'  # Default format
+
+                        # For media encoded thumbnails/images, need to stick to file_to_download
                         try:
                             filesize = await self.__attachment_handler.download_decrypt_file(secret_key_str, file_to_download, tmp_file)
                             self.__logger.debug(f"Downloaded {filesize} bytes for file {filename}")
