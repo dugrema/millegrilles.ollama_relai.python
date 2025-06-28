@@ -298,9 +298,9 @@ class DocumentIndexHandler:
             else:
                 if job_type and fuuid:  # Job to do, download file
                     tmp_file = tempfile.NamedTemporaryFile(mode='wb+')
+                    file_to_download = job.get('file')
                     try:
                         # Combine version and key to ensure legacy decryption info is available
-                        file_to_download = job.get('file')
                         if file_to_download is None:
                             file_to_download = version.copy()
                         # info_decryption.update(job['key'])
@@ -318,7 +318,7 @@ class DocumentIndexHandler:
                             raise Exception(f"Error downloading fuuid {fuuid}, will retry")
                     except nacl.exceptions.RuntimeError as e:
                         tmp_file.close()
-                        self.__logger.error(f"Error decrypting fuuid {fuuid}, CANCELLING: {e}")
+                        self.__logger.error(f"Error decrypting fuuid {fuuid}, params nonce:{file_to_download} CANCELLING: {e}")
                         await self.__cancel_job(job)
                         continue
                     except:
