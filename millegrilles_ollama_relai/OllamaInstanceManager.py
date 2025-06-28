@@ -6,7 +6,7 @@ import logging
 
 import redis.asyncio as redis
 from redis.exceptions import ConnectionError as RedisConnectionError
-from ollama import AsyncClient, ProcessResponse, ListResponse, ShowResponse
+from ollama import AsyncClient, ProcessResponse, ListResponse, ShowResponse, ResponseError
 from typing import Optional, Any, Coroutine, Callable, Awaitable
 
 from millegrilles_messages.messages import Constantes
@@ -155,7 +155,7 @@ class OllamaInstance:
             self.__ready = len(self.__ollama_model_by_id) > 0
 
             self.__logger.debug(f"Connection OK: {self.url}")
-        except (httpx.ConnectError, ConnectionError) as e:
+        except (ConnectionError, httpx.ConnectError, ResponseError) as e:
             # Failed to connect
             if self.__logger.isEnabledFor(logging.DEBUG):
                 self.__logger.exception(f"Connection error on {self.url}")

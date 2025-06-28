@@ -418,7 +418,10 @@ class OllamaChatHandler:
                     tools=tools,
                     stream=True,
                     think=think,
-                    options={"num_ctx": context_len}
+                    options={
+                        "num_ctx": context_len,
+                        # "num_gpu": 18,
+                    }
                 )
 
                 # Keep the streaming output for tool calls
