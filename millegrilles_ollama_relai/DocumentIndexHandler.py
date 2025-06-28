@@ -861,10 +861,15 @@ Detect the type of document according to the content that was provided.
         raise ValueError(f"Unsupported document mimetype: {mimetype}")
 
     # Trim content
+    content_len = len(content)
     try:
-        content = content[0: context_chars]
+        if content_len > context_chars:
+            content = content[0:context_chars]
+            LOGGER.info(f"Truncated document to {context_chars}. Initial len:{content_len}")
+        else:
+            LOGGER.debug(f"Document not truncated, len: {content_len} / {context_chars}")
     except IndexError:
-        pass  # Document fits in context
+        LOGGER.debug(f"Document not truncated, len: {content_len} / {context_chars}")
 
     command_prompt = f"<UserProfile>user_language: {language}, timezone: America/Toronto</UserProfile>\n\n<Document>{content}</Document>"
     tmp_file.seek(0)
