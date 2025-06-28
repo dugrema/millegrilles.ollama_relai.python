@@ -196,7 +196,7 @@ class DocumentIndexHandler:
         while self.__context.stopping is False:
             self.__event_fetch_jobs.set()
             self.__vector_store_cache.clear()  # Rudely clear the cache
-            await self.__context.wait(300)  # Trigger once every 5 minutes
+            await self.__context.wait(120)  # Trigger once every 2 minutes
 
         # Unblock the query thread
         self.__event_fetch_jobs.set()
@@ -214,37 +214,40 @@ class DocumentIndexHandler:
 
             if self.__intake_queue.qsize() == 0:
                 lease_actions: list[str] = list()
+                try:
+                    if self.__context.configuration.summary_active:
+                        try:
+                            # Ensure that the summary model is available locally
+                            rag_configuration = self.__context.rag_configuration
+                            embedding_model = rag_configuration['model_query_name']
+                            _instance = self.__ollama_instances.pick_instance_for_model(embedding_model)
+                            lease_actions.append(CONST_ACTION_SUMMARY)
+                        except (TypeError, KeyError) as e:
+                            self.__logger.debug(f"RAG configuration not initialized yet: {e}")
 
-                if self.__context.configuration.summary_active:
-                    try:
-                        # Ensure that the summary model is available locally
-                        rag_configuration = self.__context.rag_configuration
-                        embedding_model = rag_configuration['model_query_name']
-                        _instance = self.__ollama_instances.pick_instance_for_model(embedding_model)
-                        lease_actions.append(CONST_ACTION_SUMMARY)
-                    except (TypeError, KeyError) as e:
-                        self.__logger.debug(f"RAG configuration not initialized yet: {e}")
-
-                if self.__context.configuration.rag_active:
-                    try:
-                        # Ensure that the RAG model is available locally
-                        rag_configuration = self.__context.rag_configuration
-                        embedding_model = rag_configuration['model_embedding_name']
-                        _instance = self.__ollama_instances.pick_instance_for_model(embedding_model)
-                        lease_actions.append(CONST_ACTION_RAG)
-                    except (TypeError, KeyError) as e:
-                        self.__logger.debug(f"RAG configuration not initialized yet: {e}")
+                    if self.__context.configuration.rag_active:
+                        try:
+                            # Ensure that the RAG model is available locally
+                            rag_configuration = self.__context.rag_configuration
+                            embedding_model = rag_configuration['model_embedding_name']
+                            _instance = self.__ollama_instances.pick_instance_for_model(embedding_model)
+                            lease_actions.append(CONST_ACTION_RAG)
+                        except (TypeError, KeyError) as e:
+                            self.__logger.debug(f"RAG configuration not initialized yet: {e}")
 
 
-                for lease_action in lease_actions:
-                    # Try to fetch more items
-                    self.__logger.debug("Triggering fetch of new batch of files for RAG/Summary (low/empty intake queue)")
-                    try:
-                        await self.__query_batch(lease_action)
-                    except asyncio.TimeoutError:
-                        self.__logger.warning("Timeout querying for files to index")
-                    except (AttributeError, KeyError, ValueError) as e:
-                        self.__logger.warning("Error loading file or filehost configuration: %s" % e)
+                    for lease_action in lease_actions:
+                        # Try to fetch more items
+                        self.__logger.debug("Triggering fetch of new batch of files for RAG/Summary (low/empty intake queue)")
+                        try:
+                            await self.__query_batch(lease_action)
+                        except asyncio.TimeoutError:
+                            self.__logger.warning("Timeout querying for files to index")
+                        except (AttributeError, KeyError, ValueError) as e:
+                            self.__logger.warning("Error loading file or filehost configuration: %s" % e)
+                except:
+                    self.__logger.exception("__query_thread Unhandled exception - stopping")
+                    self.__context.stop()
 
             await self.__event_fetch_jobs.wait()
 
@@ -440,7 +443,7 @@ class DocumentIndexHandler:
             model = rag_configuration.get('model_query_name') or llm_configuration['default_model']
         elif job_type == CONST_JOB_SUMMARY_IMAGE:
             model = rag_configuration.get('model_vision_name') or rag_configuration.get('model_query_name') or llm_configuration['default_model']
-            context_len = 4096  # Force short context for vision model to fit  # TODO Add Context_len for vision
+            context_len = None  #  4096  # Force short context for vision model to fit  # TODO Add Context_len for vision
         else:
             raise ValueError(f'Unsupported job type: {job_type}')
 
@@ -454,7 +457,7 @@ class DocumentIndexHandler:
 
         async with instance.semaphore:
             # Make a few attempts to generate valid JSON, increase the temperature each time to vary the result.
-            temperature = 0.0
+            temperature = 0.1
             for i in range(0, 2):
                 tmp_file.seek(0)  # Ensure file pointer is reset
                 try:
@@ -463,7 +466,7 @@ class DocumentIndexHandler:
                     break
                 except ValidationError as e:
                     self.__logger.warning(f"JSON validation error on generate response for file tuuid:{job.get('tuuid')}/fuuid:{job.get('fuuid')} (temperature: {temperature}): {e}")
-                    temperature += 0.3
+                    temperature += 0.2
             else:
                 # Unable to get a structured JSON summary output, revert to string output
                 tmp_file.seek(0)  # Ensure file pointer is reset
@@ -839,13 +842,20 @@ Detect the type of document according to the content that was provided.
     context_chars = math.floor(2.5 * context_len)
 
     if mimetype == 'application/pdf':
-        loader = PyPDFLoader(tmp_file.name, mode="single")
-        document_list = await asyncio.to_thread(loader.load)
+        extraction_kwargs = {'strict': False}
+        loader = PyPDFLoader(tmp_file.name, mode="single", extraction_kwargs=extraction_kwargs)
+        try:
+            document_list = await asyncio.to_thread(loader.load)
+        except PdfStreamError as e:
+            raise FatalSummaryException(e)
         content = document_list[0].page_content
 
     elif mimetype.startswith('text/'):
         content = await asyncio.to_thread(tmp_file.read, context_chars)
-        content = content.decode('utf-8')
+        try:
+            content = content.decode('utf-8')
+        except UnicodeDecodeError as e:
+            raise FatalSummaryException(e)
 
     else:
         raise ValueError(f"Unsupported document mimetype: {mimetype}")
