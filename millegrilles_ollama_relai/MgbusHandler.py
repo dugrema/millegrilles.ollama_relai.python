@@ -180,15 +180,18 @@ def create_volatile_q_channel(context: MilleGrillesBusContext,
     q_instance.add_routing_key(RoutingKey(
         Constantes.SECURITE_PRIVE, f'requete.{OllamaConstants.DOMAIN_OLLAMA_RELAI}.getModels'))
 
+    q_instance.add_routing_key(RoutingKey(
+        Constantes.SECURITE_PRIVE, 'evenement.AiLanguage.configurationUpdated'))
+
+    if context.configuration.rag_active or context.configuration.summary_active:  # RAG (document index)
+        q_instance.add_routing_key(RoutingKey(
+            Constantes.SECURITE_PUBLIC, 'evenement.filecontroler.filehostNewFuuid'))
+
     if context.configuration.rag_active:  # RAG (document index)
         q_instance.add_routing_key(RoutingKey(
             Constantes.SECURITE_PROTEGE, f'commande.{OllamaConstants.DOMAIN_OLLAMA_RELAI}.indexDocuments'))
         q_instance.add_routing_key(RoutingKey(
             Constantes.SECURITE_PRIVE, f'requete.{OllamaConstants.DOMAIN_OLLAMA_RELAI}.queryRag'))
-        q_instance.add_routing_key(RoutingKey(
-            Constantes.SECURITE_PUBLIC, 'evenement.filecontroler.filehostNewFuuid'))
-        q_instance.add_routing_key(RoutingKey(
-            Constantes.SECURITE_PRIVE, 'evenement.AiLanguage.configurationUpdated'))
 
     q_channel.add_queue(q_instance)
     return q_channel
