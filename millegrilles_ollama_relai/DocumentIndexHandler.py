@@ -10,6 +10,7 @@ from asyncio import TaskGroup
 from typing import Optional, TypedDict
 
 import nacl.exceptions
+import tiktoken
 from pydantic import Field, ValidationError
 
 from ollama import AsyncClient, ResponseError
@@ -28,7 +29,7 @@ from millegrilles_messages.messages import Constantes
 from millegrilles_messages.messages.MessagesModule import MessageWrapper
 from millegrilles_messages.Filehost import FilehostConnection
 
-from millegrilles_ollama_relai.OllamaContext import OllamaContext, RagConfiguration
+from millegrilles_ollama_relai.OllamaContext import OllamaContext
 from millegrilles_ollama_relai.OllamaInstanceManager import OllamaInstance, model_name_to_id, OllamaInstanceManager
 from millegrilles_ollama_relai.Util import decode_base64_nopad
 from millegrilles_ollama_relai.Structs import SummaryText
@@ -41,6 +42,7 @@ CONST_ACTION_SUMMARY = 'leaseForSummary'
 CONST_JOB_RAG = 'rag'
 CONST_JOB_SUMMARY_TEXT = 'summaryText'
 CONST_JOB_SUMMARY_IMAGE = 'summaryImage'
+CONST_CHAR_MULTIPLIER = 4.5
 
 
 class FileInformation(TypedDict):
@@ -105,7 +107,9 @@ class DocumentIndexHandler:
 
         return False  # The response is handled by the processing instance
 
-    async def trigger_indexing(self):
+    async def trigger_indexing(self, delay: Optional[float] = None):
+        if delay:
+            await self.__context.wait(delay)
         self.__event_fetch_jobs.set()
 
     async def query_rag(self, instance: OllamaInstance, message: MessageWrapper) -> Optional[dict]:
@@ -533,16 +537,16 @@ class DocumentIndexHandler:
 
         parsed = response.parsed
         if parsed['ok'] is not True:
-            self.__logger.warning("Error retrieving batch of files for RAG: %s" % parsed)
+            self.__logger.warning("Error retrieving batch of files: %s" % parsed)
         elif parsed.get('code') == 1:
-            self.__logger.debug("No more files to process for RAG")
+            self.__logger.debug("No more files to process")
             return
 
         # Parse batch file and insert on queue per item
         leases = parsed['leases']
         secret_keys: list = parsed['secret_keys']
 
-        self.__logger.debug(f"Received batch of files {len(leases)} for RAG indexing")
+        self.__logger.debug(f"Received batch of files {len(leases)} for indexing or summary")
 
         for lease in leases:
             metadata = lease.get('metadata')
@@ -680,7 +684,7 @@ async def summarize_file(client: AsyncClient, job: FileInformation, model: str,
 
     if job_type == CONST_JOB_SUMMARY_TEXT:
         system_prompt, command_prompt = await format_text_prompt(language, context_len, job['mimetype'], tmp_file)
-        LOGGER.debug(f"PROMPT (len:{len(system_prompt) + len(command_prompt)})\n{command_prompt}")
+        # LOGGER.debug(f"PROMPT (len:{len(system_prompt) + len(command_prompt)})\n{command_prompt}")
         response = await client.generate(
             model=model,
             # prompt=system_prompt + "\n" + command_prompt,
@@ -691,7 +695,7 @@ async def summarize_file(client: AsyncClient, job: FileInformation, model: str,
         )
     elif job_type == CONST_JOB_SUMMARY_IMAGE:
         system_prompt, command_prompt = await format_image_prompt(language)
-        LOGGER.debug(f"PROMPT (len:{len(system_prompt) + len(command_prompt)})\n{command_prompt}")
+        # LOGGER.debug(f"PROMPT (len:{len(system_prompt) + len(command_prompt)})\n{command_prompt}")
         image_content = await asyncio.to_thread(tmp_file.read)
         response = await client.generate(
             model=model,
@@ -839,7 +843,9 @@ Detect the type of document according to the content that was provided.
   For example: An article title. A new type of quantum state has been uncovered by scientists at a restaurant ...
 
 """
-    context_chars = math.floor(2.5 * context_len)
+    encoding = tiktoken.encoding_for_model("text-embedding-3-small")
+
+    char_multiplier = CONST_CHAR_MULTIPLIER
 
     if mimetype == 'application/pdf':
         extraction_kwargs = {'strict': False}
@@ -851,7 +857,7 @@ Detect the type of document according to the content that was provided.
         content = document_list[0].page_content
 
     elif mimetype.startswith('text/'):
-        content = await asyncio.to_thread(tmp_file.read, context_chars)
+        content = await asyncio.to_thread(tmp_file.read, char_multiplier * context_len)
         try:
             content = content.decode('utf-8')
         except UnicodeDecodeError as e:
@@ -860,18 +866,26 @@ Detect the type of document according to the content that was provided.
     else:
         raise ValueError(f"Unsupported document mimetype: {mimetype}")
 
-    # Trim content
-    content_len = len(content)
-    try:
-        if content_len > context_chars:
-            content = content[0:context_chars]
-            LOGGER.info(f"Truncated document to {context_chars}. Initial len:{content_len}")
-        else:
-            LOGGER.debug(f"Document not truncated, len: {content_len} / {context_chars}")
-    except IndexError:
-        LOGGER.debug(f"Document not truncated, len: {content_len} / {context_chars}")
-
     command_prompt = f"<UserProfile>user_language: {language}, timezone: America/Toronto</UserProfile>\n\n<Document>{content}</Document>"
+
+    # Trim content
+    for i in range(0, 10):
+        encoded_output = encoding.encode(command_prompt)
+        if len(encoded_output) > context_len:
+            char_multiplier -= 0.25
+            content_len = len(content)
+            context_chars = math.floor(char_multiplier * context_len)
+            try:
+                content = content[0:context_chars]
+                LOGGER.info(f"Truncated document to {context_chars}. Initial len:{content_len}")
+                # Prepare a new prompt with truncated output
+                command_prompt = f"<UserProfile>user_language: {language}, timezone: America/Toronto</UserProfile>\n\n<Document>{content}</Document>"
+            except IndexError:
+                LOGGER.debug(f"Document not truncated, len: {content_len} / {context_chars}")
+        else:
+            LOGGER.debug(f"Document not truncated, {len(encoded_output)}/{context_len} tokens ({len(content)} chars)")
+            break
+
     tmp_file.seek(0)
 
     return system_prompt, command_prompt

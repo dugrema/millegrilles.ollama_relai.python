@@ -157,8 +157,8 @@ class OllamaManager:
     async def query_rag(self, instance: OllamaInstance, message: MessageWrapper):
         return await self.__document_handler.query_rag(instance, message)
 
-    async def trigger_rag_indexing(self):
-        await self.__document_handler.trigger_indexing()
+    async def trigger_rag_indexing(self, delay: Optional[float] = None):
+        await self.__document_handler.trigger_indexing(delay=delay)
 
     async def __reload_ai_configuration(self):
         producer = await self.context.get_producer()

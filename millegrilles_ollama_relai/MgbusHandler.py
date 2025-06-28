@@ -1,3 +1,5 @@
+import asyncio
+import datetime
 import logging
 
 from asyncio import TaskGroup
@@ -10,7 +12,7 @@ from millegrilles_messages.messages import Constantes
 from millegrilles_messages.bus.PikaChannel import MilleGrillesPikaChannel
 from millegrilles_messages.bus.PikaQueue import MilleGrillesPikaQueueConsumer, RoutingKey
 from millegrilles_messages.messages.MessagesModule import MessageWrapper
-from millegrilles_ollama_relai.OllamaInstanceManager import OllamaInstanceManager, model_name_to_id, OllamaInstance
+from millegrilles_ollama_relai.OllamaInstanceManager import OllamaInstanceManager, OllamaInstance
 from millegrilles_ollama_relai.OllamaManager import OllamaManager
 from millegrilles_ollama_relai import Constantes as OllamaConstants
 
@@ -77,10 +79,18 @@ class MgbusHandler:
         message_type = message.routing_key.split('.')[0]
         domain = message.routage['domaine']
         action = message.routage['action']
+        estampille = message.estampille
+
+        # Volatile messages expire after 90 seconds
+        expired_timestamp = (datetime.datetime.now() - datetime.timedelta(seconds=90)).timestamp()
+        if estampille < expired_timestamp:
+            return None  # Ignore
 
         if message_type == 'evenement':
             if domain == 'filecontroler' and action == 'filehostNewFuuid' and 'filecontroler' in roles:
-                await self.__manager.trigger_rag_indexing()
+                # Create delayed task - we are listening to the filecontroler, need to give time for GrosFichiers to
+                # register the visit
+                asyncio.create_task(self.__manager.trigger_rag_indexing(delay=3))
                 return None
             elif domain == 'AiLanguage' and action == 'configurationUpdated' and 'AiLanguage' in domains_env:
                 await self.__manager.trigger_reload_ai_configuration()
