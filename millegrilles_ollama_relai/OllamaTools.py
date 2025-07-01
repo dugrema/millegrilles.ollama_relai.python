@@ -1,4 +1,5 @@
 import logging
+from typing import Optional
 
 from millegrilles_messages.Filehost import FilehostConnection
 from millegrilles_ollama_relai.OllamaContext import OllamaContext
@@ -20,11 +21,12 @@ class OllamaToolHandler:
     async def run(self):
         await self.__context.wait()
 
-    def tools(self):
-        tools = list()
-        for m in self.__tool_modules.values():
-            tools.extend(m.tools)
-        return tools
+    def tools(self) -> Optional[list[OllamaTool]]:
+        return None
+        # tools = list()
+        # for m in self.__tool_modules.values():
+        #     tools.extend(m.tools)
+        # return tools
 
     async def run_tool(self, user_profile: dict, tool_call) -> str:
         function_name = tool_call.function.name

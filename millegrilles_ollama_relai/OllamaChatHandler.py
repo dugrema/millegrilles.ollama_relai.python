@@ -12,6 +12,7 @@ import os
 
 from typing import Optional, AsyncGenerator, Any
 
+import pytz
 from ollama import ChatResponse
 
 from millegrilles_messages.messages import Constantes as ConstantesMilleGrilles
@@ -23,7 +24,7 @@ from millegrilles_messages.chiffrage.Mgs4 import chiffrer_mgs4_bytes_secrete
 from millegrilles_messages.chiffrage.DechiffrageUtils import dechiffrer_bytes_secrete, dechiffrer_document_secrete
 from millegrilles_ollama_relai.OllamaInstanceManager import model_name_to_id, OllamaInstance
 from millegrilles_ollama_relai.OllamaTools import OllamaToolHandler
-
+from millegrilles_ollama_relai.prompts.chat_system_prompts import CHAT_PROMPT_PROFESSIONAL, USER_INFORMATION_LAYOUT
 
 MAX_TOOL_ITERATIONS = 4
 
@@ -109,6 +110,7 @@ class OllamaChatHandler:
         # enveloppe = EnveloppeCertificat.from_pem(original_message['certificat'])
         enveloppe = message.certificat
         user_id = enveloppe.get_user_id
+        username = enveloppe.subject_common_name
         attachments: dict = original_message['attachements']
         correlation_id = attachments['correlation_id']
         reply_to = attachments['reply_to']
@@ -163,14 +165,22 @@ class OllamaChatHandler:
                                      correlation_id=correlation_id, reply_to=reply_to)
                 return False
 
+            system_prompt = self.__prepare_message_prompt(username, 'en_CA', 'America/Toronto')
+
+            chat_messages = [
+                {'role': 'system', 'content': system_prompt}
+            ]
+
             chat_message = await asyncio.to_thread(dechiffrer_bytes_secrete, decryption_key, content['encrypted_content'])
             if chat_history:
                 encrypted_content = await asyncio.to_thread(dechiffrer_document_secrete, decryption_key, chat_history)
-                chat_messages = encrypted_content.get('messageHistory') or list()
+                chat_message_history = encrypted_content.get('messageHistory') or list()
                 attachment_keys = encrypted_content.get('attachmentKeys')
             else:
-                chat_messages = list()
+                chat_message_history = list()
                 attachment_keys = None
+
+            chat_messages.extend(chat_message_history)
 
             current_message_content = chat_message.decode('utf-8')
             attached_tuuids: Optional[list[str]] = None
@@ -389,13 +399,15 @@ class OllamaChatHandler:
 
     async def ollama_chat(self, instance: OllamaInstance, user_profile: dict, messages: list[dict], model: str):
         client = instance.get_async_client(self.__context.configuration, timeout=180)
-        context_len = self.__context.chat_configuration.get('chat_context_length') or 4096
+        # context_len = self.__context.chat_configuration.get('chat_context_length') or 4096
 
         # Check if the model supports tools
         try:
             model_info = instance.get_model(model)
             if 'tools' in model_info['capabilities']:
                 tools = self.__tool_handler.tools()
+                if len(tools) == 0:
+                    tools = None
             else:
                 tools = None
             think = 'thinking' in model_info['capabilities'] or False
@@ -418,10 +430,10 @@ class OllamaChatHandler:
                     tools=tools,
                     stream=True,
                     think=think,
-                    options={
-                        "num_ctx": context_len,
-                        # "num_gpu": 18,
-                    }
+                    # options={
+                    #     "num_ctx": context_len,
+                    #     "num_gpu": 18,
+                    # }
                 )
 
                 # Keep the streaming output for tool calls
@@ -478,6 +490,19 @@ class OllamaChatHandler:
                                      attachments={'streaming': True})
 
             await self.__context.wait(15)
+
+    def __prepare_message_prompt(self, username: str, language: str, timezone: str):
+        timezone = pytz.timezone(timezone)
+        params = {
+            'username': username,
+            'language': language,
+            'current_date': datetime.datetime.now(tz=timezone),
+            'timezone': timezone.zone,
+        }
+        user_information = USER_INFORMATION_LAYOUT.format(**params)
+        system_prompt = CHAT_PROMPT_PROFESSIONAL.format(**{"user_information": user_information})
+
+        return system_prompt
 
 
 async def extract_pdf_content(tmp_file: tempfile.TemporaryFile) -> Optional[str]:
