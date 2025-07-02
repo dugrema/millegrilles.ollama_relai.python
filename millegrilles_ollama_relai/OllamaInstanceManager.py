@@ -3,6 +3,7 @@ import datetime
 
 import httpx
 import logging
+import re
 
 import redis.asyncio as redis
 from redis.exceptions import ConnectionError as RedisConnectionError
@@ -28,10 +29,37 @@ class OllamaModelParams:
         self.id = id
         self.model = model
         self.show_response = show_response
+        self.__context_length = 4096
+
+        self.__load_parameters()
+
+    def __load_parameters(self):
+        # Note: Unless overridden by parameters, the ollama num_ctx defaults to 4096 regardless of model capacity
+        # info = self.show_response.modelinfo
+        # try:
+        #     architecture = info['general.architecture']
+        #     self.__context_length = info[f'{architecture}.context_length']
+        # except KeyError:
+        #     pass
+
+        # Overrides
+        try:
+            for param in self.show_response.parameters.splitlines():
+                group = re.search(r'(\w+)\s+(\S+)', param)
+                key = group[1]
+                value = group[2]
+                if key == 'num_ctx':
+                    self.__context_length = int(value)
+        except AttributeError:
+            pass  # No custom parameters
 
     @property
     def capabilities(self):
         return self.show_response.capabilities
+
+    @property
+    def context_length(self):
+        return self.__context_length
 
 
 class OllamaInstance:
@@ -393,6 +421,7 @@ class OllamaInstanceManager:
             models.append({
                 'name': model.model.model,
                 'capabilities': model.capabilities,
+                'num_ctx': model.context_length,
             })
         return models
 
