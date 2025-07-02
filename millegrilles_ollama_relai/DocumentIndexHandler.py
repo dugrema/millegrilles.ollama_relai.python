@@ -33,7 +33,8 @@ from millegrilles_ollama_relai.OllamaContext import OllamaContext
 from millegrilles_ollama_relai.OllamaInstanceManager import OllamaInstance, model_name_to_id, OllamaInstanceManager
 from millegrilles_ollama_relai.Util import decode_base64_nopad
 from millegrilles_ollama_relai.Structs import SummaryText
-from millegrilles_ollama_relai.prompts.index_system_prompts import CHAT_PROMPT_INDEXING_MAIN
+from millegrilles_ollama_relai.prompts.index_system_prompts import PROMPT_INDEXING_SYSTEM_IMAGES, \
+    PROMPT_INDEXING_SYSTEM_DOCUMENT
 
 LOGGER = logging.getLogger(__name__)
 
@@ -44,6 +45,7 @@ CONST_JOB_RAG = 'rag'
 CONST_JOB_SUMMARY_TEXT = 'summaryText'
 CONST_JOB_SUMMARY_IMAGE = 'summaryImage'
 CONST_CHAR_MULTIPLIER = 4.5
+CONST_SUMMARY_NUM_PREDICT = 1536
 
 
 class FileInformation(TypedDict):
@@ -700,26 +702,22 @@ async def summarize_file(client: AsyncClient, job: FileInformation, model: str,
 
     if job_type == CONST_JOB_SUMMARY_TEXT:
         system_prompt, command_prompt = await format_text_prompt(language, context_len, job['mimetype'], tmp_file)
-        # LOGGER.debug(f"PROMPT (len:{len(system_prompt) + len(command_prompt)})\n{command_prompt}")
         response = await client.generate(
             model=model,
-            # prompt=system_prompt + "\n" + command_prompt,
             prompt=command_prompt,
             system=system_prompt,
             format=format,
-            options={"temperature": temperature, "num_ctx": context_len, "num_predict": 1024}
+            options={"temperature": temperature, "num_ctx": context_len, "num_predict": CONST_SUMMARY_NUM_PREDICT}
         )
     elif job_type == CONST_JOB_SUMMARY_IMAGE:
         system_prompt, command_prompt = await format_image_prompt(language)
-        # LOGGER.debug(f"PROMPT (len:{len(system_prompt) + len(command_prompt)})\n{command_prompt}")
         image_content = await asyncio.to_thread(tmp_file.read)
         response = await client.generate(
             model=model,
-            # prompt=system_prompt + "\n" + command_prompt,
             prompt=command_prompt,
             system=system_prompt,
             format=format,
-            options={"temperature": temperature, "num_ctx": context_len, "num_predict": 1024},
+            options={"temperature": temperature, "num_ctx": context_len, "num_predict": CONST_SUMMARY_NUM_PREDICT},
             images=[image_content]
         )
     else:
@@ -818,20 +816,9 @@ Provide a clear and direct response to the user's query, including inline citati
 
 
 async def format_image_prompt(language: str):
-
-    system_prompt = """
-# Task
-Generate a detailed description of the image. 
-
-## Instructions
-
-* Generate a detailed description in the summary field.
-* Provide a list of tags, for exemple: landscape, daytime, tree, dog, people
-* Do not ask questions, just provide the information. This is not an interactive prompt.
-* Use the user language provided in the prompt to response.
-
-"""
-    command_prompt = f"<UserProfile>user_language: {language}</UserProfile> Describe this image"
+    params = {'language': language}
+    system_prompt = PROMPT_INDEXING_SYSTEM_IMAGES.format(**params)
+    command_prompt = f"Describe this image"
 
     return system_prompt, command_prompt
 
@@ -842,7 +829,7 @@ async def format_text_prompt(language: str, context_len: int, mimetype: str, tmp
     char_multiplier = CONST_CHAR_MULTIPLIER
 
     params = {'language': language}
-    system_prompt = CHAT_PROMPT_INDEXING_MAIN.format(**params)
+    system_prompt = PROMPT_INDEXING_SYSTEM_DOCUMENT.format(**params)
 
     if mimetype == 'application/pdf':
         extraction_kwargs = {'strict': False}
