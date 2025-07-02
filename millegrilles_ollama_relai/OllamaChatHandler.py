@@ -24,7 +24,7 @@ from millegrilles_messages.chiffrage.Mgs4 import chiffrer_mgs4_bytes_secrete
 from millegrilles_messages.chiffrage.DechiffrageUtils import dechiffrer_bytes_secrete, dechiffrer_document_secrete
 from millegrilles_ollama_relai.OllamaInstanceManager import model_name_to_id, OllamaInstance
 from millegrilles_ollama_relai.OllamaTools import OllamaToolHandler
-from millegrilles_ollama_relai.prompts.chat_system_prompts import CHAT_PROMPT_PROFESSIONAL, USER_INFORMATION_LAYOUT
+from millegrilles_ollama_relai.prompts.chat_system_prompts import CHAT_PROMPT_KNOWLEDGE_BASE, USER_INFORMATION_LAYOUT
 
 MAX_TOOL_ITERATIONS = 4
 
@@ -500,7 +500,7 @@ class OllamaChatHandler:
             'timezone': timezone.zone,
         }
         user_information = USER_INFORMATION_LAYOUT.format(**params)
-        system_prompt = CHAT_PROMPT_PROFESSIONAL.format(**{"user_information": user_information})
+        system_prompt = CHAT_PROMPT_KNOWLEDGE_BASE.format(**{"user_information": user_information})
 
         return system_prompt
 

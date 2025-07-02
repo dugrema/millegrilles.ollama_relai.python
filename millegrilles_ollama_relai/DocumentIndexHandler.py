@@ -33,6 +33,7 @@ from millegrilles_ollama_relai.OllamaContext import OllamaContext
 from millegrilles_ollama_relai.OllamaInstanceManager import OllamaInstance, model_name_to_id, OllamaInstanceManager
 from millegrilles_ollama_relai.Util import decode_base64_nopad
 from millegrilles_ollama_relai.Structs import SummaryText
+from millegrilles_ollama_relai.prompts.index_system_prompts import CHAT_PROMPT_INDEXING_MAIN
 
 LOGGER = logging.getLogger(__name__)
 
@@ -456,18 +457,19 @@ class DocumentIndexHandler:
             raise Exception("No RAG configuration provided - configure it with MilleGrilles AiChat")
 
         job_type = job['job_type']
-        context_len = rag_configuration.get('context_len') or 4096
         if job_type in [CONST_JOB_RAG, CONST_JOB_SUMMARY_TEXT]:
             model = rag_configuration.get('model_query_name') or llm_configuration['default_model']
         elif job_type == CONST_JOB_SUMMARY_IMAGE:
             model = rag_configuration.get('model_vision_name') or rag_configuration.get('model_query_name') or llm_configuration['default_model']
-            context_len = None  #  4096  # Force short context for vision model to fit  # TODO Add Context_len for vision
         else:
             raise ValueError(f'Unsupported job type: {job_type}')
 
         instance = self.__ollama_instances.pick_instance_for_model(model)
         if instance is None:
             raise Exception(f'Unsupported model: {model}')
+
+        instance_model = instance.get_model(model)
+        context_length = instance_model.context_length
 
         encryption_key = job['key']
         secret_key: bytes = decode_base64_nopad(encryption_key['cle_secrete_base64'])
@@ -480,7 +482,7 @@ class DocumentIndexHandler:
                 tmp_file.seek(0)  # Ensure file pointer is reset
                 try:
                     client = instance.get_async_client(self.__context.configuration)
-                    summary = await summarize_file(client, job, model, tmp_file, context_len=context_len, temperature=temperature)
+                    summary = await summarize_file(client, job, model, tmp_file, context_len=context_length, temperature=temperature)
                     break
                 except ValidationError as e:
                     self.__logger.warning(f"JSON validation error on generate response for file tuuid:{job.get('tuuid')}/fuuid:{job.get('fuuid')} (temperature: {temperature}): {e}")
@@ -489,7 +491,7 @@ class DocumentIndexHandler:
                 # Unable to get a structured JSON summary output, revert to string output
                 tmp_file.seek(0)  # Ensure file pointer is reset
                 summary = await summarize_file(client, job, model, tmp_file,
-                                               context_len=context_len, temperature=0.0, noformat=True)
+                                               context_len=context_length, temperature=0.0, noformat=True)
                 # raise FatalSummaryException(f'Unable to get a valid JSON output for file tuuid:{job.get('tuuid')}/fuuid:{job.get('fuuid')}')
 
         # Encrypt result
@@ -835,31 +837,12 @@ Generate a detailed description of the image.
 
 
 async def format_text_prompt(language: str, context_len: int, mimetype: str, tmp_file: tempfile.NamedTemporaryFile) -> (str, str):
-    system_prompt = """
-# Task
-
-Summarize the content of this document. Use the language provided in the UserProfile tag.
-
-# Information required on all types
-
-* Summary in the user's language.
-* Create a comma-separated list of tags in the user's language. For example: pdf, invoice, article, 2024
-* Output in the user's own language, the user's language provided in the UserProfile tag. 
-* When possible, include the number of pages at the end of the summary.
-
-# Summary guide depending on document type
-
-Detect the type of document according to the content that was provided.
-
-* If the document is an invoice, summarize as: Invoice of company "INSERT COMPANY NAME", total amount:"INSERT AMOUNT" due by "INSERT DATE".
-* If the document is a contract, summarize as: Contract between parties "PARTY A", "PARTY B" and "PARTY C" on "TOPIC OF CONTRACT". Also mention contractual dates when possible.
-* If the document is an article, include the *title* and then a *summary* using between 100 and 250 words. 
-  For example: An article title. A new type of quantum state has been uncovered by scientists at a restaurant ...
-
-"""
     encoding = tiktoken.encoding_for_model("text-embedding-3-small")
 
     char_multiplier = CONST_CHAR_MULTIPLIER
+
+    params = {'language': language}
+    system_prompt = CHAT_PROMPT_INDEXING_MAIN.format(**params)
 
     if mimetype == 'application/pdf':
         extraction_kwargs = {'strict': False}
@@ -880,24 +863,23 @@ Detect the type of document according to the content that was provided.
     else:
         raise ValueError(f"Unsupported document mimetype: {mimetype}")
 
-    command_prompt = f"<UserProfile>user_language: {language}, timezone: America/Toronto</UserProfile>\n\n<Document>{content}</Document>"
+    command_prompt = f"<Document>\n{content}\n</Document>"
 
     # Trim content
     for i in range(0, 10):
-        encoded_output = encoding.encode(command_prompt)
-        if len(encoded_output) > context_len:
+        content_len = len(encoding.encode(system_prompt + command_prompt))
+        if content_len > context_len:
             char_multiplier -= 0.25
-            content_len = len(content)
             context_chars = math.floor(char_multiplier * context_len)
             try:
                 content = content[0:context_chars]
-                LOGGER.info(f"Truncated document to {context_chars}. Initial len:{content_len}")
+                LOGGER.info(f"Truncated document to {context_chars}. Initial len:{len(system_prompt + command_prompt)}")
                 # Prepare a new prompt with truncated output
-                command_prompt = f"<UserProfile>user_language: {language}, timezone: America/Toronto</UserProfile>\n\n<Document>{content}</Document>"
+                command_prompt = f"<Document>\n{content}\n</Document>"
             except IndexError:
-                LOGGER.debug(f"Document not truncated, len: {content_len} / {context_chars}")
+                LOGGER.debug(f"Document not truncated, len: {content_len}/{context_len}")
         else:
-            LOGGER.debug(f"Document not truncated, {len(encoded_output)}/{context_len} tokens ({len(content)} chars)")
+            LOGGER.debug(f"Document not truncated, {content_len}/{context_len} tokens ({len(system_prompt + command_prompt)} chars)")
             break
 
     tmp_file.seek(0)
