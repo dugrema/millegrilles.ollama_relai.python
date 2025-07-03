@@ -22,6 +22,7 @@ from millegrilles_ollama_relai.OllamaContext import OllamaContext
 LOGGER = logging.getLogger(__name__)
 
 CONST_OLLAMA_LEASE_DURATION = 20
+CONST_OLLAMA_CHAT_LEASE_DURATION = 180  # Message duration in queue
 
 class OllamaModelParams:
 
@@ -365,6 +366,15 @@ class OllamaInstanceManager:
         """
         url_key = url.replace('/', '_').replace(':', '_')
         result = await self.__redis_client.set(f'ollama.{url_key}', '', nx=initial, ex=CONST_OLLAMA_LEASE_DURATION)
+        return result is True
+
+    async def reserve_chat_id(self, chat_id: str):
+        """
+        Dedupes processing of chats if multiple instances have the same models
+        :param chat_id:
+        :return:
+        """
+        result = await self.__redis_client.set(f'ollama.chat.{chat_id}', '', nx=True, ex=CONST_OLLAMA_CHAT_LEASE_DURATION)
         return result is True
 
     # async def keep_instance_lease_alive(self, url: str):

@@ -22,7 +22,7 @@ from millegrilles_messages.Filehost import FilehostConnection
 from millegrilles_ollama_relai.OllamaContext import OllamaContext
 from millegrilles_messages.chiffrage.Mgs4 import chiffrer_mgs4_bytes_secrete
 from millegrilles_messages.chiffrage.DechiffrageUtils import dechiffrer_bytes_secrete, dechiffrer_document_secrete
-from millegrilles_ollama_relai.OllamaInstanceManager import model_name_to_id, OllamaInstance
+from millegrilles_ollama_relai.OllamaInstanceManager import model_name_to_id, OllamaInstance, OllamaInstanceManager
 from millegrilles_ollama_relai.OllamaTools import OllamaToolHandler
 from millegrilles_ollama_relai.prompts.chat_system_prompts import CHAT_PROMPT_KNOWLEDGE_BASE, USER_INFORMATION_LAYOUT
 
@@ -30,9 +30,10 @@ MAX_TOOL_ITERATIONS = 4
 
 class OllamaChatHandler:
 
-    def __init__(self, context: OllamaContext, attachment_handler: FilehostConnection, tool_handler: OllamaToolHandler):
+    def __init__(self, context: OllamaContext, ollama_instances: OllamaInstanceManager, attachment_handler: FilehostConnection, tool_handler: OllamaToolHandler):
         self.__logger = logging.getLogger(__name__ + '.' + self.__class__.__name__)
         self.__context = context
+        self.__ollama_instances = ollama_instances
         self.__attachment_handler = attachment_handler
         self.__tool_handler = tool_handler
         self.__waiting_ids: dict[str, dict] = dict()  # Key = chat_id, value = {reply_to, correlation_id}
@@ -53,6 +54,10 @@ class OllamaChatHandler:
 
         # Start emitting "waiting" events to tell the client it is still queued-up (keep-alive)
         chat_id = message.id
+
+        if self.__running_chats.get(chat_id) is not None or self.__waiting_ids.get(chat_id) is not None or chat_id in self.__cancelled_chats:
+            return False  # Already registered
+
         self.__waiting_ids[chat_id] = {'reply_to': message.reply_to, 'correlation_id': message.correlation_id}
 
         # Re-emit the message on the model's process Q
@@ -100,6 +105,9 @@ class OllamaChatHandler:
             # Chat has been cancelled, skip it
             self.__cancelled_chats.remove(chat_id)
             return False
+
+        if not await self.__ollama_instances.reserve_chat_id(chat_id):
+            return False  # Already processing
 
         # original_message: MessageWrapper = self.__waiting_ids[chat_id]['original']
 

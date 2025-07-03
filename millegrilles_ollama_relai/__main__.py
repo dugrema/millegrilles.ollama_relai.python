@@ -62,7 +62,7 @@ async def wiring(context: OllamaContext) -> list[Awaitable]:
     ollama_instances = OllamaInstanceManager(context)
     attachment_handler = FilehostConnection(context)
     tool_handler = OllamaToolHandler(context, attachment_handler)
-    chat_handler = OllamaChatHandler(context, attachment_handler, tool_handler)
+    chat_handler = OllamaChatHandler(context, ollama_instances, attachment_handler, tool_handler)
     document_handler = DocumentIndexHandler(context, ollama_instances, attachment_handler)
 
     # Facade
