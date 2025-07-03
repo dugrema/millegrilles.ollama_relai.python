@@ -22,7 +22,7 @@ from millegrilles_ollama_relai.OllamaContext import OllamaContext
 LOGGER = logging.getLogger(__name__)
 
 CONST_OLLAMA_LEASE_DURATION = 20
-CONST_OLLAMA_CHAT_LEASE_DURATION = 180  # Message duration in queue
+CONST_OLLAMA_CHAT_LEASE_DURATION = 900  # Message duration in queue
 
 class OllamaModelParams:
 
@@ -269,6 +269,7 @@ class OllamaInstanceManager:
         # Used to deduplicate query processing across multiple instances.
         self.__query_dedupe_memory: dict[str, dict] = dict()
         self.__redis_client: Optional[redis.Redis] = None
+        self.__redis_client_semaphore = asyncio.BoundedSemaphore(1)
 
     @property
     def ready(self) -> bool:
@@ -365,17 +366,25 @@ class OllamaInstanceManager:
         :return: True if lock acquired.
         """
         url_key = url.replace('/', '_').replace(':', '_')
-        result = await self.__redis_client.set(f'ollama.{url_key}', '', nx=initial, ex=CONST_OLLAMA_LEASE_DURATION)
+        async with self.__redis_client_semaphore:
+            result = await self.__redis_client.set(f'ollama.{url_key}', '', nx=initial, ex=CONST_OLLAMA_LEASE_DURATION)
         return result is True
 
-    async def reserve_chat_id(self, chat_id: str):
-        """
-        Dedupes processing of chats if multiple instances have the same models
-        :param chat_id:
-        :return:
-        """
-        result = await self.__redis_client.set(f'ollama.chat.{chat_id}', '', nx=True, ex=CONST_OLLAMA_CHAT_LEASE_DURATION)
-        return result is True
+    # async def reserve_chat_id(self, chat_id: str):
+    #     """
+    #     Dedupes processing of chats if multiple instances have the same models
+    #     :param chat_id:
+    #     :return:
+    #     """
+    #     key = f'ollama.chat.{chat_id}'
+    #     async with self.__redis_client_semaphore:
+    #         # result = await self.__redis_client.set(key, '', nx=True, ex=CONST_OLLAMA_CHAT_LEASE_DURATION)
+    #         result = await self.__redis_client.setnx(key, '')
+    #         await self.__redis_client.wait(1, 1)
+    #         # await self.__context.wait(0.5)
+    #     await self.__redis_client.expire(key, CONST_OLLAMA_CHAT_LEASE_DURATION)
+    #     self.__logger.info(f"Chat_id {key} redis result: {result}")
+    #     return result is True
 
     # async def keep_instance_lease_alive(self, url: str):
     #     """
@@ -454,7 +463,9 @@ class OllamaInstanceManager:
         # Try to use redis first
         if self.__redis_client:
             query_key = f'ollama.query.{query_id}'
-            result = await self.__redis_client.set(query_key, '', nx=True, ex=900)
+            async with self.__redis_client_semaphore:
+                result = await self.__redis_client.set(query_key, '', nx=True, ex=CONST_OLLAMA_CHAT_LEASE_DURATION)
+                await self.__redis_client.wait(1, 1)
             if result is not True:
                 raise Exception('Already processing')
             # await self.__redis_client.expire(query_key, 900)  # Expire when all messages in MQ expire (Q TTL)

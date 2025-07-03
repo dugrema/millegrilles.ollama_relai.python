@@ -83,6 +83,7 @@ class OllamaChatHandler:
     async def cancel_chat(self, message: MessageWrapper):
         chat_id = message.parsed['chat_id']
         self.__logger.info(f"Cancelling chat_id {chat_id}")
+
         # The chat is not in the waiting queue, try to cancel its task
         try:
             self.__running_chats[chat_id].cancel()
@@ -104,10 +105,7 @@ class OllamaChatHandler:
         if chat_id in self.__cancelled_chats:
             # Chat has been cancelled, skip it
             self.__cancelled_chats.remove(chat_id)
-            return False
-
-        if not await self.__ollama_instances.reserve_chat_id(chat_id):
-            return False  # Already processing
+            return None
 
         # original_message: MessageWrapper = self.__waiting_ids[chat_id]['original']
 
