@@ -164,24 +164,38 @@ class OllamaInstance:
 
             current_model_ids = set(self.__ollama_model_by_id.keys())
 
+            send_update_event = False
             for model in self.__model_list_response.models:
                 model_id = model_name_to_id(model.model)
+                update = False
                 try:
-                    self.__ollama_model_by_id[model_id]
+                    existing_model = self.__ollama_model_by_id[model_id]
+                    if existing_model.model.modified_at < model.modified_at:
+                        # Model has been updated
+                        update = True
                 except KeyError:
+                    update = True
+                else:
+                    current_model_ids.remove(model_id)  # Model still used
+
+                if update:
                     # Add model to list
                     show_model = await client.show(model.model)
                     model_params = OllamaModelParams(model_id, model, show_model)
                     self.__ollama_model_by_id[model_id] = model_params
-                else:
-                    current_model_ids.remove(model_id)  # Model still used
+
+                    send_update_event = True  # Model added/updated
 
             # Remove models that are no longer present
             for model_id in current_model_ids:
+                send_update_event = True  # Model removed
                 del self.__ollama_model_by_id[model_id]
 
             # Status ready is True if at least 1 model is available
             self.__ready = len(self.__ollama_model_by_id) > 0
+
+            if send_update_event:
+                await self.send_model_update_event()
 
             self.__logger.debug(f"Connection OK: {self.url}")
         except (ConnectionError, httpx.ConnectError, ResponseError) as e:
@@ -249,6 +263,11 @@ class OllamaInstance:
 
     async def __process_message(self, message: MessageWrapper):
         return await self.__message_cb(self, message)
+
+    async def send_model_update_event(self):
+        producer = await self.__context.get_producer()
+        event = {'url': self.url}
+        await producer.event(event, 'ollama_relai', 'modelsUpdated', exchange=Constantes.SECURITE_PRIVE)
 
 
 class OllamaInstanceManager:
