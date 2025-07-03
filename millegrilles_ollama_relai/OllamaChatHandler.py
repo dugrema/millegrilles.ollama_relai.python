@@ -410,16 +410,23 @@ class OllamaChatHandler:
         # Check if the model supports tools
         try:
             model_info = instance.get_model(model)
-            if 'tools' in model_info['capabilities']:
-                tools = self.__tool_handler.tools()
-                if len(tools) == 0:
-                    tools = None
-            else:
-                tools = None
-            think = 'thinking' in model_info['capabilities'] or False
         except (TypeError, AttributeError, IndexError, KeyError):
             tools = None
             think = False
+        else:
+            try:
+                if 'tools' in model_info.capabilities:
+                    tools = self.__tool_handler.tools()
+                    if len(tools) == 0:
+                        tools = None
+                else:
+                    tools = None
+            except (TypeError, AttributeError, IndexError, KeyError):
+                tools = None
+            try:
+                think = 'thinking' in model_info.capabilities or False
+            except  (TypeError, AttributeError, IndexError, KeyError):
+                think = False
 
         async with instance.semaphore:
             # Loop to allow tool calls by the model.
