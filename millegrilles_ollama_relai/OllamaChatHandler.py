@@ -443,10 +443,7 @@ class OllamaChatHandler:
                     tools=tools,
                     stream=True,
                     think=think,
-                    # options={
-                    #     "num_ctx": context_len,
-                    #     "num_gpu": 18,
-                    # }
+                    # options={"num_ctx": context_len, "num_gpu": 18}
                 )
 
                 # Keep the streaming output for tool calls
@@ -479,10 +476,6 @@ class OllamaChatHandler:
                     except TypeError:
                         pass
 
-                    # if part.message.tool_calls or (part.done and tools_called):
-                    #     pass  # Avoid yielding part with tool calls, need to handle here first
-                    # else:
-                    #     yield part
                     yield part
 
                 # If no tools were called, the chat is done. If we have tool responses, loop for a new iteration.
