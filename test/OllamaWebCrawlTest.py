@@ -13,24 +13,31 @@ from ollama import AsyncClient
 CONST_MODEL = "gemma3n:e2b-it-q4_K_M-LOPT"
 # CONST_MODEL = "llama3.2:3b-instruct-q8_0"
 
-CONST_SUMMARY_NUM_PREDICT_KEYWORDS = 100
+CONST_SUMMARY_NUM_PREDICT_KEYWORDS = 512
 CONST_SUMMARY_NUM_PREDICT_RESPONSE = 1536
 CONST_THINK = None
 
 CONST_LIMIT_ARTICLE = 20_000
 
 SYSTEM_KEYWORDS = """
-You are an AI assistant that generates keywords to find relevant information on a local instance of Wikipedia.
+You are an AI assistant that generates a summary and keywords to find relevant information on a local instance of Wikipedia.
+You will output plain JSON as a response, this is not an interactive prompt.
 
 # Instructions
 
+* Generate a short summary, between 75 and 200 words on the topic of the query.
 * Generate a few keywords in English to apply to a local search engine.
 * Each keyword should be a single word unless it is a name.
 ** Do not translate the name of people, use it as provided.
 ** If the keyword is a name in another language for a place, technology, geographic feature, etc. then translate it to English.
 * Each keyword *must* be directly related to the user query.
-* Return the keywords in JSON format: {"keywords": ["word1", "word2", "word3"]}.
-* Do not use markdown formatting. You must output plain JSON. 
+* You must output plain JSON. Do not use markdown (md) formatting in the response. 
+* Return the summary and keywords in JSON format: {"summary": "YOUR SUMMARY", "keywords": ["word1", "word2", "word3"]}.
+
+# Output format
+
+* Reply in json.
+* Do not use markdown.
 """
 
 SYSTEM_FIND_PAGE = """
@@ -41,24 +48,24 @@ You are provided with a user prompt and a list of search results.
 
 * Check the user prompt.
 * From the list of search results, identify a URL that most closely matches the user query.
-* Return that url using JSON in the form of: {"url": "/kiwix/content/wikipedia_en_all_maxi_2023-11/A/XXXXXXXXX"}
+* Do not use markdown (md) formatting in the response. You must output plain JSON.
+* Return that url using plain JSON in the form of: {"url": "/kiwix/content/wikipedia_en_all_maxi_2023-11/A/XXXXXXXXX"}
 * Make sure to *copy the entire* "href" element properly, do not truncate the url.
-* Do not use markdown formatting. You must output plain JSON.
 """
 
 SYSTEM_USE_ARTICLE = """
-You are an AI assistant that answers user questions factually. Since you have a cutoff date and your information may
-also be incomplete, a wikipedia article was selected to assist you in providing the most factual and up to date 
-information.
+You are an AI assistant that fact checks affirmations and explanations.
+Since you have a cutoff date and your information may also be incomplete, a authoritative article was later selected to assist
+you in providing the most factual and up to date information. This article is in the element authority.
+
+This is a fact-checking step for the content of valueToCheck.
 
 # Instructions
 
-* Answer the user's query directly factually with your knowledge.
-* Use the user's language in your answer.
-* Make sure to answer the user's question immediately and directly, do not summarize the article.
-* The article's information is authoritative on its topic, it's main purpose is to fact-check your knowledge on that topic.
-* If any of the article is misaligned or contradicts your own information, you may use information from the article as a source for your answer.
-* Only if the article does not correspond to the user's question or intent, you must answer with your own knowledge.
+* Only if the article contradicts the valueToCheck response, put a disclaimer stating that the checked content is inaccurate and then list the inaccuracies using the article.
+* Make sure the valueToCheck answered the user's query directly and factually.
+* The article's information is authoritative on its topic, it's main purpose is to fact-check the valueToCheck response on that topic.
+* Only if the article does not correspond to the user's question or intent, indicate that you have not been able to complete the fact-check.
 """
 
 async def crawl_search(keywords: list[str]):
@@ -78,7 +85,7 @@ async def crawl_search(keywords: list[str]):
     results = soup.select_one(".results")
     results_html = str(results)
 
-    print(f"HTML result page\n{results_html}")
+    # print(f"HTML result page\n{results_html}")
 
     return results_html
 
@@ -87,7 +94,6 @@ async def crawl_get_page(client: AsyncClient, user_prompt: str, search_results: 
 <query>
 {user_prompt}
 </query>
-
 <searchResults>
 {search_results}
 </searchResults>
@@ -117,25 +123,31 @@ async def crawl_get_page(client: AsyncClient, user_prompt: str, search_results: 
     content = soup.select_one("#mw-content-text")
     content_string = content.text
 
-    return content_string
+    return url, content_string
 
-async def review_article(client: AsyncClient, user_prompt: str, article: str):
+async def review_article(client: AsyncClient, user_prompt: str, assistant_response: str, article: str):
 
     article_truncated = article[:CONST_LIMIT_ARTICLE]
 
     prompt = f"""
 <userProfile>
-   user_language: en_CA
+user_language: en_CA
 </userProfile>
+
 <query>
 {user_prompt}
 </query>
-<article>
-{article_truncated}
-</article>
-    """
 
-    print(article_truncated)
+<authority>
+{article_truncated}
+</authority>
+
+<valueToCheck>
+{assistant_response}
+</valueToCheck>
+"""
+
+    # print(article_truncated)
     print(f"Prompt len: {len(prompt)}, System prompt len: {len(SYSTEM_USE_ARTICLE)}")
 
     stream = await client.generate(
@@ -169,14 +181,25 @@ async def query_with_keywords():
         options={"num_predict": CONST_SUMMARY_NUM_PREDICT_KEYWORDS, "temperature": 0.01},
     )
 
-    print(f"Keywords: {output.response}")
-    response_dict = json.loads(output.response)
+    print(f"Summary/Keywords: {output.response}")
+    try:
+        response_dict = json.loads(output.response)
+    except json.decoder.JSONDecodeError:
+        # Try to remove markdown
+        response_str = output.response.replace("```json", "").replace('```', "")
+        response_dict = json.loads(response_str)
+
+    assistant_response = response_dict["summary"]
+    print(f"Initial response\n{assistant_response}\n")
+
     keywords = response_dict['keywords']
     search_result = await crawl_search(keywords)
-    article = await crawl_get_page(client, prompt, search_result)
+    url, article = await crawl_get_page(client, prompt, search_result)
+
+    print(f"Verifying response with url: {url}")
 
     flag_init = False
-    async for chunk in review_article(client, prompt, article):
+    async for chunk in review_article(client, prompt, assistant_response, article):
         if not flag_init:
             print("*** Response ***\n")
             flag_init = True
