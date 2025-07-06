@@ -8,12 +8,14 @@ from typing import AsyncGenerator, Any, Union
 from bs4 import BeautifulSoup
 from ollama import GenerateResponse, AsyncClient
 
+from millegrilles_ollama_relai.OllamaInstanceManager import OllamaInstance
 from millegrilles_ollama_relai.Structs import SummaryKeywords, LinkIdPicker, KnowledgeBaseSearchResponse, \
     MardownTextResponse
 from millegrilles_ollama_relai.Util import check_token_len
 from millegrilles_ollama_relai.prompts.knowledge_base_prompt import KNOWLEDGE_BASE_INITIAL_SUMMARY_PROMPT, \
     KNOWLEDGE_BASE_FIND_PAGE_PROMPT, KNOWLEDGE_BASE_SYSTEM_USE_ARTICLE_PROMPT
 
+CONST_DEFAULT_CONTEXT_LENGTH = 8192
 
 class KnowledgBaseHandler:
 
@@ -21,10 +23,13 @@ class KnowledgBaseHandler:
         self.__client = client
         self.__server_hostname = 'https://libs.millegrilles.com'
         self.__model = 'gemma3n:e2b-it-q4_K_M-LOPT'
-        self.__context_length = 12288
+        self.__context_length = CONST_DEFAULT_CONTEXT_LENGTH
         self.__num_predict_summary = 1536
         self.__num_predict_response = 2048
-        self.__limit_article = int(2.5 * self.__context_length)
+
+    @property
+    def _limit_article(self):
+        return int(2.5 * self.__context_length)
 
     async def parse_query(self, query: str) -> SummaryKeywords:
         output = await self.__client.generate(
@@ -118,7 +123,7 @@ class KnowledgBaseHandler:
         return search_url, links
 
     async def review_article(self, user_prompt: str, language: str, assistant_response: str, article: str):
-        article_truncated = article[:self.__limit_article]
+        article_truncated = article[:self._limit_article]
 
         prompt = f"""
     <userProfile>
@@ -160,12 +165,17 @@ class KnowledgBaseHandler:
         async for value in stream:
             yield value
 
-    async def __process(self, query: str) -> AsyncGenerator[Union[SummaryKeywords, KnowledgeBaseSearchResponse, GenerateResponse], Any]:
+    async def __process(self, instance: OllamaInstance, query: str) -> AsyncGenerator[Union[SummaryKeywords, KnowledgeBaseSearchResponse, GenerateResponse], Any]:
+        # Find model, update context_length
+        model_info = instance.get_model(self.__model)
+        context_length = model_info.context_length or self.__context_length
+        self.__context_length = context_length
+
         # Extract information from the user query
         summary = await self.parse_query(query)
         yield summary
 
-        # Permorm search
+        # Perform search
         if summary.t is None:
             return  # Done
 
@@ -179,8 +189,8 @@ class KnowledgBaseHandler:
         async for chunk in self.review_article(query, summary.l, summary.s, reference_content):
             yield chunk
 
-    async def run_query(self, query: str) -> AsyncGenerator[MardownTextResponse, Any]:
-        async for chunk in self.__process(query):
+    async def run_query(self, instance: OllamaInstance, query: str) -> AsyncGenerator[MardownTextResponse, Any]:
+        async for chunk in self.__process(instance, query):
             if isinstance(chunk, GenerateResponse):
                 yield MardownTextResponse(text=chunk.response)
             elif isinstance(chunk, SummaryKeywords):

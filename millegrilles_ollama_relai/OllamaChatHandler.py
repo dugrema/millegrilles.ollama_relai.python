@@ -537,14 +537,8 @@ class OllamaChatHandler:
     async def knowledge_chat(self, instance: OllamaInstance, user_profile: dict, current_message_content: str):
         client = instance.get_async_client(self.__context.configuration)
         knowledge_base_handler = KnowledgBaseHandler(client)
-        async for chunk in knowledge_base_handler.run_query(current_message_content):
+        async for chunk in knowledge_base_handler.run_query(instance, current_message_content):
             yield chunk
-            #if chunk.complete_block:
-            #    print_text(chunk.text)
-            #else:
-            #    print(chunk.text, end='')
-
-        pass
 
     async def emit_event_thread(self, correlations: dict[str, dict], event_name: str):
         # Wait for the initialization of the producer
