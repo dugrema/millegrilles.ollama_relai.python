@@ -11,7 +11,8 @@ class SummaryText(BaseModel):
 
 class SummaryKeywords(BaseModel):
   s: str
-  kw: list[str]
+  t: Optional[str]
+  l: str
 
 
 class LinkIdPicker(BaseModel):

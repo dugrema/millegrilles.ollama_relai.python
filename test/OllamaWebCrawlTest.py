@@ -2,6 +2,7 @@ import asyncio
 import json
 import urllib.parse
 import requests
+import tiktoken
 
 from bs4 import BeautifulSoup
 from ollama import AsyncClient
@@ -11,16 +12,20 @@ from millegrilles_ollama_relai.Structs import SummaryKeywords, LinkIdPicker
 # CONST_MODEL = "deepseek-r1:8b-0528-qwen3-q8_0"
 # CONST_MODEL = "gemma3:27b-it-qat-LOPT"
 # CONST_MODEL = "gemma3:12b-it-qat-LOPT"
+# CONST_MODEL = "gemma3n:e2b-it-q4_K_M"
 CONST_MODEL = "gemma3n:e2b-it-q4_K_M-LOPT"
 # CONST_MODEL = "gemma3n:e4b-it-q8_0-LOPT"
+# CONST_MODEL = "gemma3n:e4b-it-q8_0"
 # CONST_MODEL = "gemma3n:e4b-it-fp16-LOPT"
 # CONST_MODEL = "llama3.2:3b-instruct-q8_0"
 
 CONST_SUMMARY_NUM_PREDICT_KEYWORDS = 512
-CONST_SUMMARY_NUM_PREDICT_RESPONSE = 1536
+CONST_SUMMARY_NUM_PREDICT_RESPONSE = 2048
 CONST_THINK = None
 
-CONST_LIMIT_ARTICLE = 20_000
+CONST_CONTEXT_LEN = 8192
+# CONST_CONTEXT_LEN = 12288
+CONST_LIMIT_ARTICLE = int(2.5 * CONST_CONTEXT_LEN)
 CONST_HOSTNAME = "https://libs.millegrilles.com"
 
 SYSTEM_KEYWORDS = """
@@ -28,24 +33,21 @@ You are an AI assistant that acts as a knowledge base for users.
 
 # Instructions
 
-* Generate a short summary, between 75 and 500 words on the topic of the query, depending on complexity of the topic.
-* Generate up to 5 keywords in English to apply to a local search engine using these rules:
-** Always put the most specific keywords first.
-** If searching for a person by name, use the full name as a keyword, then use the following additional keywords: biography, life .
-** If the keyword is a name in another language for a place, technology, geographic feature, etc. then translate it to English.
-** Otherwise, each keyword should be a single word.
+* Identify the language of the question. Return it as an ISO language value, e.g. en_US, fr_CA, ...
+* Generate a short summary in the user's language, between 75 and 500 words on the topic of the query, depending on complexity of the topic.
+* Identify a main topic **in English** of the query in less than 10 words with no punctuation. Translate the topic to English if the user query is in a different language.
 * You must output plain JSON. Do not use markdown (md) formatting in the response. 
-* Return the following response in JSON format: {"s": "YOUR SUMMARY", "kw": ["word1", "word2", "word3"]}.
-* Only if the user query is not a question on a factual topic, return a null list of keywords.
+* Return the following response in JSON format: {"s": "YOUR SUMMARY", "t": "Your topic in English", "l": "ISO language of the question, e.g. en_US"}.
+* Only if the user query is not a question on a factual topic, return a null topic "t".
 """
 
 SYSTEM_FIND_PAGE = """
-You are an AI assistant that identifies a page to use for fact-checking a user prompt.
-You are provided with a user prompt and a list of search results.
+You are an AI assistant that identifies a page to use for fact-checking a topic.
+You are provided with a topic and a list of search results.
 
 # Instructions
 
-* From the list of search results, identify a link_id that most likely contains answers to the main topic of the user query. 
+* From the list of search results, identify a link_id that most likely contains answers to the topic. 
 * Do not use markdown (md) formatting in the response. You must output plain JSON.
 * Return that linkId using plain JSON in the form of: {"link_id": 0}
 """
@@ -59,29 +61,35 @@ This is a fact-checking step for the content of valueToCheck.
 
 # Instructions
 
-* The valueToCheck is a 500 word or less answer to the user query. Check for contradictions only; the valueToCheck is meant to be incomplete compared to the full article. 
+* Answer in the user's language provided in tag userProfile.
+* The valueToCheck is a 500 word or less answer to the user query.
+* Do not repeat valueToCheck. It is already displayed to the user.
+* Use the reference to provide a more comprehensive explanation to the one in valueToCheck. 
 * Only if the reference contradicts the valueToCheck response:
+** answer in the user's language
 ** put a disclaimer stating that the checked content is inaccurate
-** list up to 3 of the inaccuracies using the reference.
-** if there are more than 3 inaccuracies, add a warning that more of the content is inaccurate and to check the reference.
+** list up to 3 of the contradictions using the reference
+** only list contradictions, do not list an item that is accurate
+** if there are more than 3 contradictions, add a warning that more of the content is contradictory and to check the reference.
 * Make sure the valueToCheck answered the user's query directly and factually.
 * Only if the reference does not correspond to the user's question or intent, indicate that you have not been able to complete the fact-check.
 * Unless the reference does not answer the user's question, the reference's information is authoritative on the topic, it's main purpose is to fact-check the valueToCheck.
 * Respond in plain text.
 """
 
-async def crawl_search(keywords: list[str]):
+async def crawl_search(topic: str):
     params = [
         "books.name=wikipedia_en_all_maxi_2023-11",
-        f"pattern={urllib.parse.quote_plus(", ".join(keywords))}",
+        # f"pattern={urllib.parse.quote_plus(", ".join(keywords))}",
+        f"pattern={urllib.parse.quote_plus(topic)}",
         "userlang=en",
         "start=1",
-        "pageLength=20",
+        "pageLength=30",
     ]
     params = "&".join(params)
-    url = f"{CONST_HOSTNAME}/kiwix/search?{params}"
+    search_url = f"{CONST_HOSTNAME}/kiwix/search?{params}"
 
-    response = await asyncio.to_thread(requests.get, url)
+    response = await asyncio.to_thread(requests.get, search_url)
     response.raise_for_status()
 
     data = response.text
@@ -105,9 +113,9 @@ async def crawl_search(keywords: list[str]):
         item_id += 1
     print("--------------")
 
-    return links
+    return search_url, links
 
-async def crawl_get_page(client: AsyncClient, user_prompt: str, search_results: list[dict]):
+async def crawl_get_page(client: AsyncClient, topic: str, search_results: list[dict]):
 
     # Extract the title, description and linkId to put in the context
     mapped_results = [{
@@ -117,9 +125,9 @@ async def crawl_get_page(client: AsyncClient, user_prompt: str, search_results: 
     } for r in search_results]
 
     prompt = f"""
-<query>
-{user_prompt}
-</query>
+<topic>
+{topic}
+</topic>
 <searchResults>
 {json.dumps(mapped_results)}
 </searchResults>
@@ -155,13 +163,13 @@ async def crawl_get_page(client: AsyncClient, user_prompt: str, search_results: 
 
     return url, content_string
 
-async def review_article(client: AsyncClient, user_prompt: str, assistant_response: str, article: str):
+async def review_article(client: AsyncClient, user_prompt: str, language: str, assistant_response: str, article: str):
 
     article_truncated = article[:CONST_LIMIT_ARTICLE]
 
     prompt = f"""
 <userProfile>
-user_language: en_CA
+user_language: {language}
 </userProfile>
 
 <query>
@@ -175,10 +183,17 @@ user_language: en_CA
 <reference>
 {article_truncated}
 </reference>
+
+<instructions>
+Produce the summary of reference and the fact check of valueToCheck as per the instructions in the system prompt.
+</instructions>
 """
 
     # print(article_truncated)
-    print(f"Prompt len: {len(prompt)}, System prompt len: {len(SYSTEM_USE_ARTICLE)}")
+    token_len = check_token_len(prompt+SYSTEM_USE_ARTICLE)
+    print(f"Prompt len: {len(prompt)}, System prompt len: {len(SYSTEM_USE_ARTICLE)}, Total token len: {token_len}")
+    #if token_len > CONST_CONTEXT_LEN - 700:  # Reserve 700 token for model template (not exact)
+    #    raise Exception("Prompt too long")
 
     stream = await client.generate(
         model=CONST_MODEL,
@@ -199,6 +214,7 @@ async def query_with_keywords():
     # prompt = "Where did the St. Lawrence river in Canada get its name from?"
     # prompt = "D'où vient le nom Saint-Laurent pour le fleuve canadien?"
     # prompt = "What was the cause of the French Revolution?"
+    prompt = "Quelle était la cause de la révolution française?"
     # prompt = "What is retrieval augmented generation (RAG)?"
     # prompt = "When did aliens invade earth?"
     # prompt = "Are UFO encounters considered real or is it a hoax?"
@@ -206,8 +222,10 @@ async def query_with_keywords():
     # prompt = "What is your cutoff date?"
     # prompt = "What is taxonomy in biology?"
     # prompt = "Are there countries with no military capability?"
-    prompt = "Is Saint Lawrence the patron saint of sailors and merchants?"
+    # prompt = "Is Saint Lawrence the patron saint of sailors and merchants?"
     # prompt = "What was the state of Iceland during the cold war?"
+    # prompt = "Qu'est-ce qu'un coureur des bois?"
+    # prompt = "How was lithography invented to make computer chips?"
 
     output = await client.generate(
         model=CONST_MODEL,
@@ -224,27 +242,49 @@ async def query_with_keywords():
     assistant_response = response_dict.s
     print(f"Initial response\n{assistant_response}\n")
 
-    keywords = response_dict.kw
-    if not keywords or len(keywords) == 0:
+    topic = response_dict.t
+    if not topic:
         print("*** Response done ***")
         return  # Done
 
-    search_result = await crawl_search(keywords)
-    url, article = await crawl_get_page(client, prompt, search_result)
+    language = response_dict.l
 
+    # keywords = response_dict.kw
+    # if not keywords or len(keywords) == 0:
+    #     print("*** Response done ***")
+    #     return  # Done
+
+    # search_result = await crawl_search(keywords)
+    search_url, search_result = await crawl_search(topic)
+    if len(search_result) == 0:
+        print("No search results identified\n*** Response done ***")
+        return  # Done
+
+    url, article = await crawl_get_page(client, topic, search_result)
+
+    print(f"Topic: {topic}")
+    print(f"Search page: {search_url}")
     print(f"Verifying response with url: {url}")
 
     flag_init = False
-    async for chunk in review_article(client, prompt, assistant_response, article):
+    async for chunk in review_article(client, prompt, language, assistant_response, article):
         if not flag_init:
             print("*** Response ***\n")
             flag_init = True
+        if chunk.done:
+            print(f"\n\nPrompt eval count: {chunk.prompt_eval_count}")
+            if chunk.prompt_eval_count >= CONST_CONTEXT_LEN:
+                raise Exception("Context window excedeed")
         print(chunk.response, end='')
     print("\n*** Response done ***")
 
 async def main():
     await query_with_keywords()
 
+def check_token_len(prompt: str):
+    encoding = tiktoken.encoding_for_model("text-embedding-3-small")
+    content_len = len(encoding.encode(prompt))
+    return content_len
 
 if __name__ == '__main__':
     asyncio.run(main())
