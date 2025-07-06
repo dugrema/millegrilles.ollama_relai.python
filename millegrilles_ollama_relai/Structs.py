@@ -19,7 +19,7 @@ class LinkIdPicker(BaseModel):
     link_id: int
 
 
-class KnowledgeBaseMarkdownText:
+class MardownTextResponse:
 
     def __init__(self, text: str, complete_block=False):
         self.text = text

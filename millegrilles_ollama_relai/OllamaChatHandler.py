@@ -23,7 +23,9 @@ from millegrilles_ollama_relai.OllamaContext import OllamaContext
 from millegrilles_messages.chiffrage.Mgs4 import chiffrer_mgs4_bytes_secrete
 from millegrilles_messages.chiffrage.DechiffrageUtils import dechiffrer_bytes_secrete, dechiffrer_document_secrete
 from millegrilles_ollama_relai.OllamaInstanceManager import model_name_to_id, OllamaInstance, OllamaInstanceManager
+from millegrilles_ollama_relai.OllamaKnowledgeBase import KnowledgBaseHandler
 from millegrilles_ollama_relai.OllamaTools import OllamaToolHandler
+from millegrilles_ollama_relai.Structs import MardownTextResponse
 from millegrilles_ollama_relai.prompts.chat_system_prompts import CHAT_PROMPT_KNOWLEDGE_BASE, USER_INFORMATION_LAYOUT
 
 MAX_TOOL_ITERATIONS = 4
@@ -236,7 +238,14 @@ class OllamaChatHandler:
                             raise NotImplementedError('File type not handled')
                 pass
 
+            # Do another check in case the chat was cancelled.
+            if chat_id in self.__cancelled_chats:
+                # Chat has been cancelled, skip it
+                self.__cancelled_chats.remove(chat_id)
+                return False
+
             # Run the query. Emit
+            output = dict()
             if chat_action == 'chat':
                 # Add the new user message to the history of chat messages
                 current_chat_message = {'role': chat_role, 'content': current_message_content}
@@ -245,20 +254,14 @@ class OllamaChatHandler:
                 chat_messages.append(current_chat_message)
 
                 chat_stream = self.ollama_chat(instance, user_profile, chat_messages, chat_model)
+                stream_coro = self.stream_chat_response(chat_id, output, enveloppe, correlation_id, reply_to, chat_stream)
             elif chat_action == 'knowledge_query':
                 chat_stream = self.knowledge_chat(instance, user_profile, current_message_content)
+                stream_coro = self.stream_response(chat_id, output, enveloppe, correlation_id, reply_to, chat_stream)
             else:
                 raise Exception('action %s not supported' % chat_action)
 
-            # Do another check in case the chat was cancelled.
-            if chat_id in self.__cancelled_chats:
-                # Chat has been cancelled, skip it
-                self.__cancelled_chats.remove(chat_id)
-                return False
-
             # Create the stream task
-            output = dict()
-            stream_coro = self.stream_chat_response(chat_id, output, enveloppe, correlation_id, reply_to, chat_stream)
             stream_task = asyncio.create_task(stream_coro)
 
             # Save task to allow cancellation, then wait on completion
@@ -407,6 +410,51 @@ class OllamaChatHandler:
 
         return None
 
+    async def stream_response(self, chat_id: str, output: dict, enveloppe: EnveloppeCertificat, correlation_id: str,
+                              reply_to: str, chat_stream: AsyncGenerator[MardownTextResponse, Any]):
+        emit_interval = datetime.timedelta(milliseconds=750)
+        next_emit = datetime.datetime.now()
+
+        think_response = []
+        complete_response = []
+        output['thinking'] = think_response
+        output['content'] = complete_response
+        output['complete'] = False
+
+        buffer = ''
+        async for chunk in chat_stream:
+            try:
+                # Stop emitting keep-alive messages
+                del self.__waiting_ids[chat_id]
+            except KeyError:
+                pass  # Ok, already removed or on another instance
+
+            buffer += chunk.text
+            if chunk.complete_block:
+                buffer += '\n\n'
+
+            now = datetime.datetime.now()
+            if now > next_emit:
+                content = buffer
+                complete_response.append(content)
+                buffer = ''
+                await self.__emit_stream_response(enveloppe, correlation_id, reply_to, content)
+                next_emit = now + emit_interval
+
+        if len(buffer) > 0:
+            # Emit last piece
+            complete_response.append(buffer)
+            await self.__emit_stream_response(enveloppe, correlation_id, reply_to, buffer)
+
+        output['complete'] = True
+
+        return None
+
+    async def __emit_stream_response(self, enveloppe: EnveloppeCertificat, correlation_id: str, reply_to: str, content: str):
+        producer = await self.__context.get_producer()
+        event = {'message': {'content': content}, 'done': False}
+        await producer.encrypt_reply([enveloppe], event, correlation_id=correlation_id, reply_to=reply_to, attachments={'streaming': True})
+
     async def ollama_chat(self, instance: OllamaInstance, user_profile: dict, messages: list[dict], model: str):
         client = instance.get_async_client(self.__context.configuration, timeout=180)
         # context_len = self.__context.chat_configuration.get('chat_context_length') or 4096
@@ -487,6 +535,14 @@ class OllamaChatHandler:
                     break  # Done
 
     async def knowledge_chat(self, instance: OllamaInstance, user_profile: dict, current_message_content: str):
+        client = instance.get_async_client(self.__context.configuration)
+        knowledge_base_handler = KnowledgBaseHandler(client)
+        async for chunk in knowledge_base_handler.run_query(current_message_content):
+            yield chunk
+            #if chunk.complete_block:
+            #    print_text(chunk.text)
+            #else:
+            #    print(chunk.text, end='')
 
         pass
 

@@ -109,7 +109,7 @@ class MgbusHandler:
             elif action == 'queryRag':
                 return await self.__manager.register_rag_query(message)
         elif message_type == 'commande':
-            if action == 'chat':
+            if action in ['chat', 'knowledge_query']:
                 return await self.__manager.register_chat(message)
 
         self.__logger.info("__on_volatile_message Ignoring unknown action %s", message.routing_key)
@@ -144,7 +144,7 @@ class MgbusHandler:
             self.__logger.debug(f"Query {message_id} already running on other ollama instance, skipping")
             return None
 
-        if action == 'chat':
+        if action in ['chat', 'knowledge_query']:
             return await self.__manager.process_chat(instance, message)
         elif action == 'queryRag':
             return await self.__manager.query_rag(instance, message)
@@ -185,6 +185,8 @@ def create_volatile_q_channel(context: MilleGrillesBusContext,
         Constantes.SECURITE_PRIVE, f'commande.{OllamaConstants.DOMAIN_OLLAMA_RELAI}.generate'))
     q_instance.add_routing_key(RoutingKey(
         Constantes.SECURITE_PRIVE, f'commande.{OllamaConstants.DOMAIN_OLLAMA_RELAI}.chat'))
+    q_instance.add_routing_key(RoutingKey(
+        Constantes.SECURITE_PRIVE, f'commande.{OllamaConstants.DOMAIN_OLLAMA_RELAI}.knowledge_query'))
     q_instance.add_routing_key(RoutingKey(
         Constantes.SECURITE_PRIVE, f'requete.{OllamaConstants.DOMAIN_OLLAMA_RELAI}.ping'))
     q_instance.add_routing_key(RoutingKey(

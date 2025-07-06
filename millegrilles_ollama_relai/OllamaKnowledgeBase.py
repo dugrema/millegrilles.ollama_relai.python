@@ -9,7 +9,7 @@ from bs4 import BeautifulSoup
 from ollama import GenerateResponse, AsyncClient
 
 from millegrilles_ollama_relai.Structs import SummaryKeywords, LinkIdPicker, KnowledgeBaseSearchResponse, \
-    KnowledgeBaseMarkdownText
+    MardownTextResponse
 from millegrilles_ollama_relai.Util import check_token_len
 from millegrilles_ollama_relai.prompts.knowledge_base_prompt import KNOWLEDGE_BASE_INITIAL_SUMMARY_PROMPT, \
     KNOWLEDGE_BASE_FIND_PAGE_PROMPT, KNOWLEDGE_BASE_SYSTEM_USE_ARTICLE_PROMPT
@@ -38,7 +38,7 @@ class KnowledgBaseHandler:
         response = SummaryKeywords.model_validate_json(output.response)
         return response
 
-    async def search_query(self, topic: str, search_results: list[dict]):
+    async def search_query(self, topic: str, query: str, search_results: list[dict]):
         # Extract the title, description and linkId to put in the context
         mapped_results = [{
             'link_id': r['linkId'],
@@ -49,6 +49,9 @@ class KnowledgBaseHandler:
     <topic>
     {topic}
     </topic>
+    <userQuery>
+    {query}
+    </userQuery>
     <searchResults>
     {json.dumps(mapped_results)}
     </searchResults>
@@ -163,24 +166,28 @@ class KnowledgBaseHandler:
         yield summary
 
         # Permorm search
+        if summary.t is None:
+            return  # Done
+
         search_url, links = await self.search_topic(summary.t)
 
         # Find matching page
-        chosen_link, reference_url, reference_content = await self.search_query(summary.t, links)
+        chosen_link, reference_url, reference_content = await self.search_query(summary.t, query, links)
         yield KnowledgeBaseSearchResponse(search_url=search_url, reference_title=chosen_link['title'], reference_url=reference_url)
 
         # Fact check summary with article
         async for chunk in self.review_article(query, summary.l, summary.s, reference_content):
             yield chunk
 
-    async def run_query(self, query: str) -> AsyncGenerator[KnowledgeBaseMarkdownText, Any]:
+    async def run_query(self, query: str) -> AsyncGenerator[MardownTextResponse, Any]:
         async for chunk in self.__process(query):
             if isinstance(chunk, GenerateResponse):
-                yield KnowledgeBaseMarkdownText(text=chunk.response)
+                yield MardownTextResponse(text=chunk.response)
             elif isinstance(chunk, SummaryKeywords):
-                yield KnowledgeBaseMarkdownText(text=chunk.s, complete_block=True)
+                content = f'{chunk.s}\n\nNow looking for a reference on: **{chunk.t}**\n'
+                yield MardownTextResponse(text=content, complete_block=True)
             elif isinstance(chunk, KnowledgeBaseSearchResponse):
-                content = f'\nReference: [{chunk.reference_title}]({chunk.reference_url})'
-                yield KnowledgeBaseMarkdownText(text=content, complete_block=True)
+                content = f'Reference: [{chunk.reference_title}]({chunk.reference_url})'
+                yield MardownTextResponse(text=content, complete_block=True)
             else:
                 raise ValueError("Unsupported chunk type", chunk)

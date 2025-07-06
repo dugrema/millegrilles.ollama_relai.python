@@ -17,7 +17,7 @@ You are provided with a topic and a list of search results.
 
 # Instructions
 
-* From the list of search results, identify a link_id that most likely contains answers to the topic. 
+* From the list of search results, identify a link_id that most likely contains answers to the topic and the user query. 
 * Do not use markdown (md) formatting in the response. You must output plain JSON.
 * Return that linkId using plain JSON in the form of: {"link_id": 0}
 """
