@@ -1,0 +1,186 @@
+import asyncio
+import json
+import requests
+import urllib.parse
+
+from typing import AsyncGenerator, Any, Union
+
+from bs4 import BeautifulSoup
+from ollama import GenerateResponse, AsyncClient
+
+from millegrilles_ollama_relai.Structs import SummaryKeywords, LinkIdPicker, KnowledgeBaseSearchResponse, \
+    KnowledgeBaseMarkdownText
+from millegrilles_ollama_relai.Util import check_token_len
+from millegrilles_ollama_relai.prompts.knowledge_base_prompt import KNOWLEDGE_BASE_INITIAL_SUMMARY_PROMPT, \
+    KNOWLEDGE_BASE_FIND_PAGE_PROMPT, KNOWLEDGE_BASE_SYSTEM_USE_ARTICLE_PROMPT
+
+
+class KnowledgBaseHandler:
+
+    def __init__(self, client: AsyncClient):
+        self.__client = client
+        self.__server_hostname = 'https://libs.millegrilles.com'
+        self.__model = 'gemma3n:e2b-it-q4_K_M-LOPT'
+        self.__context_length = 12288
+        self.__num_predict_summary = 1536
+        self.__num_predict_response = 2048
+        self.__limit_article = int(2.5 * self.__context_length)
+
+    async def parse_query(self, query: str) -> SummaryKeywords:
+        output = await self.__client.generate(
+            model=self.__model,
+            system=KNOWLEDGE_BASE_INITIAL_SUMMARY_PROMPT,
+            prompt=query,
+            think=None,
+            format=SummaryKeywords.model_json_schema(),
+            options={"num_predict": self.__num_predict_summary, "temperature": 0.01},
+        )
+        response = SummaryKeywords.model_validate_json(output.response)
+        return response
+
+    async def search_query(self, topic: str, search_results: list[dict]):
+        # Extract the title, description and linkId to put in the context
+        mapped_results = [{
+            'link_id': r['linkId'],
+            'title': r['title'],
+        } for r in search_results]
+
+        prompt = f"""
+    <topic>
+    {topic}
+    </topic>
+    <searchResults>
+    {json.dumps(mapped_results)}
+    </searchResults>
+    """
+
+        output = await self.__client.generate(
+            model=self.__model,
+            system=KNOWLEDGE_BASE_FIND_PAGE_PROMPT,
+            prompt=prompt,
+            think=None,
+            format=LinkIdPicker.model_json_schema(),
+            options={"num_predict": self.__num_predict_summary, "temperature": 0.01},
+        )
+
+        # Fetch the selected link by linkId
+        response_dict = LinkIdPicker.model_validate_json(output.response)
+        link_id = response_dict.link_id
+        chosen_link = [l for l in search_results if l['linkId'] == link_id].pop()
+        page_url = chosen_link['url']
+        url = f"{self.__server_hostname}{page_url}"
+
+        response = await asyncio.to_thread(requests.get, url)
+        response.raise_for_status()
+
+        data = response.text
+        soup = BeautifulSoup(data, "html.parser")
+        content = soup.select_one("#mw-content-text")
+        content_string = content.text
+
+        return chosen_link, url, content_string
+
+    async def search_topic(self, topic: str):
+        params = [
+            "books.name=wikipedia_en_all_maxi_2023-11",
+            # f"pattern={urllib.parse.quote_plus(", ".join(keywords))}",
+            f"pattern={urllib.parse.quote_plus(topic)}",
+            "userlang=en",
+            "start=1",
+            "pageLength=30",
+        ]
+        params = "&".join(params)
+        search_url = f"{self.__server_hostname}/kiwix/search?{params}"
+
+        response = await asyncio.to_thread(requests.get, search_url)
+        response.raise_for_status()
+
+        data = response.text
+        soup = BeautifulSoup(data, "html.parser")
+        results = soup.select_one(".results")
+
+        items = results.select("li")
+
+        links = list()
+
+        item_id = 1
+        for item in items:
+            anchor = item.select_one("a")
+            url = anchor.attrs.get("href")
+            title = anchor.text.strip()
+            description = item.select_one("cite").text[:100]
+            links.append({"linkId": item_id, "title": title, "description": description, "url": url})
+            item_id += 1
+
+        return search_url, links
+
+    async def review_article(self, user_prompt: str, language: str, assistant_response: str, article: str):
+        article_truncated = article[:self.__limit_article]
+
+        prompt = f"""
+    <userProfile>
+    user_language: {language}
+    </userProfile>
+
+    <query>
+    {user_prompt}
+    </query>
+
+    <valueToCheck>
+    {assistant_response}
+    </valueToCheck>
+
+    <reference>
+    {article_truncated}
+    </reference>
+
+    <instructions>
+    Produce the summary of reference and the fact check of valueToCheck as per the instructions in the system prompt.
+    </instructions>
+    """
+
+        # print(article_truncated)
+        # token_len = check_token_len(prompt + KNOWLEDGE_BASE_SYSTEM_USE_ARTICLE_PROMPT)
+        # print(f"Prompt len: {len(prompt)}, System prompt len: {len(KNOWLEDGE_BASE_SYSTEM_USE_ARTICLE_PROMPT)}, Total token len: {token_len}")
+        # if token_len > CONST_CONTEXT_LEN - 700:  # Reserve 700 token for model template (not exact)
+        #    raise Exception("Prompt too long")
+
+        stream = await self.__client.generate(
+            model=self.__model,
+            system=KNOWLEDGE_BASE_SYSTEM_USE_ARTICLE_PROMPT,
+            think=None,
+            prompt=prompt,
+            stream=True,
+            options={"num_predict": self.__num_predict_response, "temperature": 0.01},
+        )
+
+        async for value in stream:
+            yield value
+
+    async def __process(self, query: str) -> AsyncGenerator[Union[SummaryKeywords, KnowledgeBaseSearchResponse, GenerateResponse], Any]:
+        # Extract information from the user query
+        summary = await self.parse_query(query)
+        yield summary
+
+        # Permorm search
+        search_url, links = await self.search_topic(summary.t)
+
+        # Find matching page
+        chosen_link, reference_url, reference_content = await self.search_query(summary.t, links)
+        yield KnowledgeBaseSearchResponse(search_url=search_url, reference_title=chosen_link['title'], reference_url=reference_url)
+
+        # Fact check summary with article
+        async for chunk in self.review_article(query, summary.l, summary.s, reference_content):
+            yield chunk
+
+    async def run_query(self, query: str) -> AsyncGenerator[KnowledgeBaseMarkdownText, Any]:
+        async for chunk in self.__process(query):
+            if isinstance(chunk, GenerateResponse):
+                yield KnowledgeBaseMarkdownText(text=chunk.response)
+            elif isinstance(chunk, SummaryKeywords):
+                yield KnowledgeBaseMarkdownText(text=chunk.s, complete_block=True)
+            elif isinstance(chunk, KnowledgeBaseSearchResponse):
+                content = f'\nReference: [{chunk.reference_title}]({chunk.reference_url})'
+                yield KnowledgeBaseMarkdownText(text=content, complete_block=True)
+            else:
+                raise ValueError("Unsupported chunk type", chunk)

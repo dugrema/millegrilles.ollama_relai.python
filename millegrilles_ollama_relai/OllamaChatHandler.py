@@ -107,6 +107,10 @@ class OllamaChatHandler:
             self.__cancelled_chats.remove(chat_id)
             return None
 
+        chat_action = message.routage['action']
+        if chat_action not in ('chat', 'knowledge_query'):
+            raise ValueError(f'Unsupported chat action: {chat_action}')
+
         # original_message: MessageWrapper = self.__waiting_ids[chat_id]['original']
 
         max_context_length = 512000  # Avoid sending huge documents
@@ -232,19 +236,19 @@ class OllamaChatHandler:
                             raise NotImplementedError('File type not handled')
                 pass
 
-            # Add the new user message to the history of chat messages
-            current_chat_message = {'role': chat_role, 'content': current_message_content}
-            if image_attachments is not None:
-                current_chat_message['images'] = image_attachments
-            chat_messages.append(current_chat_message)
-
-            action = message.routage['action']
-
             # Run the query. Emit
-            if action == 'chat':
+            if chat_action == 'chat':
+                # Add the new user message to the history of chat messages
+                current_chat_message = {'role': chat_role, 'content': current_message_content}
+                if image_attachments is not None:
+                    current_chat_message['images'] = image_attachments
+                chat_messages.append(current_chat_message)
+
                 chat_stream = self.ollama_chat(instance, user_profile, chat_messages, chat_model)
+            elif chat_action == 'knowledge_query':
+                chat_stream = self.knowledge_chat(instance, user_profile, current_message_content)
             else:
-                raise Exception('action %s not supported' % action)
+                raise Exception('action %s not supported' % chat_action)
 
             # Do another check in case the chat was cancelled.
             if chat_id in self.__cancelled_chats:
@@ -481,6 +485,10 @@ class OllamaChatHandler:
                 # If no tools were called, the chat is done. If we have tool responses, loop for a new iteration.
                 if tools_called is False:
                     break  # Done
+
+    async def knowledge_chat(self, instance: OllamaInstance, user_profile: dict, current_message_content: str):
+
+        pass
 
     async def emit_event_thread(self, correlations: dict[str, dict], event_name: str):
         # Wait for the initialization of the producer
