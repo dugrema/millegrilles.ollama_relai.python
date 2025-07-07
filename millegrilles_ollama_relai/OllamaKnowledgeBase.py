@@ -14,7 +14,7 @@ from millegrilles_ollama_relai.Structs import SummaryKeywords, LinkIdPicker, Kno
     MardownTextResponse
 from millegrilles_ollama_relai.Util import check_token_len
 from millegrilles_ollama_relai.prompts.knowledge_base_prompt import KNOWLEDGE_BASE_INITIAL_SUMMARY_PROMPT, \
-    KNOWLEDGE_BASE_FIND_PAGE_PROMPT, KNOWLEDGE_BASE_SYSTEM_USE_ARTICLE_PROMPT
+    KNOWLEDGE_BASE_FIND_PAGE_PROMPT, KNOWLEDGE_BASE_SYSTEM_USE_ARTICLE_PROMPT, KNOWLEDGE_BASE_SUMMARY_ARTICLE_PROMPT
 
 CONST_DEFAULT_CONTEXT_LENGTH = 8192
 
@@ -24,9 +24,10 @@ class KnowledgBaseHandler:
         self.__client = client
         self.__server_hostname = 'https://libs.millegrilles.com'
         self.__model = 'gemma3n:e2b-it-q4_K_M-LOPT'
+        # self.__model = 'gemma3n:e4b-it-q8_0-LOPT'
         self.__context_length = CONST_DEFAULT_CONTEXT_LENGTH
-        self.__num_predict_summary = 1536
-        self.__num_predict_response = 2048
+        self.__num_predict_summary = 512
+        self.__num_predict_response = 1536
 
     @property
     def _limit_article(self):
@@ -124,30 +125,63 @@ class KnowledgBaseHandler:
 
         return search_url, links
 
-    async def review_article(self, user_prompt: str, language: str, assistant_response: str, article: str):
+    async def review_article(self, user_prompt: str, language: str, article: str):
         article_truncated = article[:self._limit_article]
 
         prompt = f"""
-    <userProfile>
-    user_language: {language}
-    </userProfile>
-
     <query>
     {user_prompt}
     </query>
 
-    <summary>
-    {assistant_response}
-    </summary>
+    <article>
+    {article_truncated}
+    </article>
+
+    <instructions>
+    Answer in {language}.
+    Put the header # Review.
+    Follow the system prompt.
+    </instructions>
+    """
+
+        params = {'language': language}
+        formatted_prompt = KNOWLEDGE_BASE_SUMMARY_ARTICLE_PROMPT.format(**params)
+
+        stream = await self.__client.generate(
+            model=self.__model,
+            system=formatted_prompt,
+            think=None,
+            prompt=prompt,
+            stream=True,
+            options={
+                "num_predict": self.__num_predict_response,
+                "temperature": 0.1,
+            },
+        )
+
+        async for value in stream:
+            yield value
+
+    async def check_summary(self, user_prompt: str, language: str, assistant_response: str, article: str):
+        article_truncated = article[:self._limit_article]
+
+        prompt = f"""
+    <query>
+    {user_prompt}
+    </query>
 
     <reference>
     {article_truncated}
     </reference>
 
+    <summary>
+    {assistant_response}
+    </summary>
+
     <instructions>
-    1. Respond in the user's language.
-    2. Produce a comprehensive summary of the reference. Use markdown with the heading # Review. 
-    3. Use markdown with heading # Fact check, then proceed to fact check the summary element using the reference.
+    Important: answer in **{language}**.
+    Put the heading: # Verification
+    Proceed to verify the summary element using the reference element as per system prompt.
     </instructions>
     """
 
@@ -157,19 +191,25 @@ class KnowledgBaseHandler:
         # if token_len > CONST_CONTEXT_LEN - 700:  # Reserve 700 token for model template (not exact)
         #    raise Exception("Prompt too long")
 
+        params = {'language': language}
+        formatted_prompt = KNOWLEDGE_BASE_SYSTEM_USE_ARTICLE_PROMPT.format(**params)
+
         stream = await self.__client.generate(
             model=self.__model,
-            system=KNOWLEDGE_BASE_SYSTEM_USE_ARTICLE_PROMPT,
+            system=formatted_prompt,
             think=None,
             prompt=prompt,
             stream=True,
-            options={"num_predict": self.__num_predict_response, "temperature": 0.01},
+            options={
+                "num_predict": self.__num_predict_response,
+                "temperature": 0.1,
+            },
         )
 
         async for value in stream:
             yield value
 
-    async def __process(self, instance: OllamaInstance, query: str) -> AsyncGenerator[Union[SummaryKeywords, KnowledgeBaseSearchResponse, GenerateResponse], Any]:
+    async def __process(self, instance: OllamaInstance, query: str) -> AsyncGenerator[Union[SummaryKeywords, KnowledgeBaseSearchResponse, GenerateResponse, MardownTextResponse], Any]:
         # Find model, update context_length
         model_info = instance.get_model(self.__model)
         context_length = model_info.context_length or self.__context_length
@@ -204,13 +244,18 @@ class KnowledgBaseHandler:
             yield KnowledgeBaseSearchResponse(search_url=None, reference_title="Provided link", reference_url=reference_url)
 
         # Fact check summary with article
-        async for chunk in self.review_article(query, summary.l, summary.s, reference_content):
+        async for chunk in self.review_article(query, summary.l, reference_content):
+            yield chunk
+
+        # Fact check summary with article
+        yield MardownTextResponse(text="\n\n")
+        async for chunk in self.check_summary(query, summary.l, summary.s, reference_content):
             yield chunk
 
     async def run_query(self, instance: OllamaInstance, query: str) -> AsyncGenerator[MardownTextResponse, Any]:
         async for chunk in self.__process(instance, query):
             if isinstance(chunk, SummaryKeywords):
-                content = f'{chunk.s}\n\nNow looking for a reference on: **{chunk.t}**\n'
+                content = f'# Summary\n\nNotice: This **may be inaccurate** and will be double-checked further down.\n\n{chunk.s}\n\nNow looking for a reference on: **{chunk.t}**\n'
                 yield MardownTextResponse(text=content, complete_block=True)
             elif isinstance(chunk, KnowledgeBaseSearchResponse):
                 content = f'Reference: [{chunk.reference_title}]({chunk.reference_url})'
@@ -218,6 +263,8 @@ class KnowledgBaseHandler:
             elif isinstance(chunk, GenerateResponse):
                 # Final pass with fact checking stream
                 yield MardownTextResponse(text=chunk.response)
+            elif isinstance(chunk, MardownTextResponse):  # Passthrough for formatting
+                yield chunk
             else:
                 raise ValueError("Unsupported chunk type", chunk)
 
