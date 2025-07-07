@@ -2,6 +2,7 @@ import asyncio
 import json
 import requests
 import urllib.parse
+from urllib.parse import urlparse
 
 from typing import AsyncGenerator, Any, Union
 
@@ -76,15 +77,16 @@ class KnowledgBaseHandler:
         link_id = response_dict.link_id
         chosen_link = [l for l in search_results if l['linkId'] == link_id].pop()
         page_url = chosen_link['url']
+
         url = f"{self.__server_hostname}{page_url}"
-
-        response = await asyncio.to_thread(requests.get, url)
-        response.raise_for_status()
-
-        data = response.text
-        soup = BeautifulSoup(data, "html.parser")
-        content = soup.select_one("#mw-content-text")
-        content_string = content.text
+        # response = await asyncio.to_thread(requests.get, url)
+        # response.raise_for_status()
+        #
+        # data = response.text
+        # soup = BeautifulSoup(data, "html.parser")
+        # content = soup.select_one("#mw-content-text")
+        # content_string = content.text
+        content_string = await asyncio.to_thread(fetch_page_content, url)
 
         return chosen_link, url, content_string
 
@@ -134,16 +136,18 @@ class KnowledgBaseHandler:
     {user_prompt}
     </query>
 
-    <valueToCheck>
+    <summary>
     {assistant_response}
-    </valueToCheck>
+    </summary>
 
     <reference>
     {article_truncated}
     </reference>
 
     <instructions>
-    Produce the summary of reference and the fact check of valueToCheck as per the instructions in the system prompt.
+    1. Respond in the user's language.
+    2. Produce a comprehensive summary of the reference. Use markdown with the heading # Review. 
+    3. Use markdown with heading # Fact check, then proceed to fact check the summary element using the reference.
     </instructions>
     """
 
@@ -179,11 +183,25 @@ class KnowledgBaseHandler:
         if summary.t is None:
             return  # Done
 
-        search_url, links = await self.search_topic(summary.t)
+        reference_url = summary.url
 
-        # Find matching page
-        chosen_link, reference_url, reference_content = await self.search_query(summary.t, query, links)
-        yield KnowledgeBaseSearchResponse(search_url=search_url, reference_title=chosen_link['title'], reference_url=reference_url)
+        if not reference_url:
+            search_url, links = await self.search_topic(summary.t)
+            # Find matching page
+            chosen_link, reference_url, reference_content = await self.search_query(summary.t, query, links)
+            yield KnowledgeBaseSearchResponse(search_url=search_url, reference_title=chosen_link['title'], reference_url=reference_url)
+        else:
+            parsed_url = urlparse(reference_url)
+            local_hostname = urlparse(self.__server_hostname)
+            if parsed_url.hostname and parsed_url.hostname != local_hostname.hostname:
+                raise ValueError(f'Unauthorized URL provided: {reference_url}')
+            url = f"{self.__server_hostname}{parsed_url.path}"
+            if parsed_url.fragment:
+                url += f'#{parsed_url.fragment}'
+            if parsed_url.query:
+                url += f'?{parsed_url.query}'
+            reference_content = await asyncio.to_thread(fetch_page_content, url)
+            yield KnowledgeBaseSearchResponse(search_url=None, reference_title="Provided link", reference_url=reference_url)
 
         # Fact check summary with article
         async for chunk in self.review_article(query, summary.l, summary.s, reference_content):
@@ -191,13 +209,26 @@ class KnowledgBaseHandler:
 
     async def run_query(self, instance: OllamaInstance, query: str) -> AsyncGenerator[MardownTextResponse, Any]:
         async for chunk in self.__process(instance, query):
-            if isinstance(chunk, GenerateResponse):
-                yield MardownTextResponse(text=chunk.response)
-            elif isinstance(chunk, SummaryKeywords):
+            if isinstance(chunk, SummaryKeywords):
                 content = f'{chunk.s}\n\nNow looking for a reference on: **{chunk.t}**\n'
                 yield MardownTextResponse(text=content, complete_block=True)
             elif isinstance(chunk, KnowledgeBaseSearchResponse):
                 content = f'Reference: [{chunk.reference_title}]({chunk.reference_url})'
                 yield MardownTextResponse(text=content, complete_block=True)
+            elif isinstance(chunk, GenerateResponse):
+                # Final pass with fact checking stream
+                yield MardownTextResponse(text=chunk.response)
             else:
                 raise ValueError("Unsupported chunk type", chunk)
+
+
+def fetch_page_content(url: str):
+    response = requests.get(url)
+    response.raise_for_status()
+
+    data = response.text
+    soup = BeautifulSoup(data, "html.parser")
+    content = soup.select_one("#mw-content-text")
+    content_string = content.text
+
+    return content_string

@@ -13,6 +13,7 @@ class SummaryKeywords(BaseModel):
     s: str
     t: Optional[str]
     l: str
+    url: Optional[str]
 
 
 class LinkIdPicker(BaseModel):
@@ -28,7 +29,7 @@ class MardownTextResponse:
 
 class KnowledgeBaseSearchResponse:
 
-    def __init__(self, search_url: str, reference_title: str, reference_url: str):
+    def __init__(self, search_url: Optional[str], reference_title: str, reference_url: str):
         self.search_url = search_url
         self.reference_title = reference_title
         self.reference_url = reference_url
