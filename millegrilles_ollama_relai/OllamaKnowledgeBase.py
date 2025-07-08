@@ -1,32 +1,40 @@
 import asyncio
 import json
+import logging
+
 import requests
 import urllib.parse
 from urllib.parse import urlparse
 
-from typing import AsyncGenerator, Any, Union
+from typing import AsyncGenerator, Any, Union, Optional
 
 from bs4 import BeautifulSoup
 from ollama import GenerateResponse, AsyncClient
 
 from millegrilles_ollama_relai.OllamaInstanceManager import OllamaInstance
 from millegrilles_ollama_relai.Structs import SummaryKeywords, LinkIdPicker, KnowledgeBaseSearchResponse, \
-    MardownTextResponse
+    MardownTextResponse, MatchResult
 from millegrilles_ollama_relai.Util import check_token_len
 from millegrilles_ollama_relai.prompts.knowledge_base_prompt import KNOWLEDGE_BASE_INITIAL_SUMMARY_PROMPT, \
-    KNOWLEDGE_BASE_FIND_PAGE_PROMPT, KNOWLEDGE_BASE_SYSTEM_USE_ARTICLE_PROMPT, KNOWLEDGE_BASE_SUMMARY_ARTICLE_PROMPT
+    KNOWLEDGE_BASE_FIND_PAGE_PROMPT, KNOWLEDGE_BASE_SYSTEM_USE_ARTICLE_PROMPT, KNOWLEDGE_BASE_SUMMARY_ARTICLE_PROMPT, \
+    KNOWLEDGE_BASE_CHECK_ARTICLE_PROMPT
 
 CONST_DEFAULT_CONTEXT_LENGTH = 8192
 
 class KnowledgBaseHandler:
 
     def __init__(self, client: AsyncClient):
+        self.__logger = logging.getLogger(__name__ + '.' + self.__class__.__name__)
         self.__client = client
         self.__server_hostname = 'https://libs.millegrilles.com'
-        self.__model = 'gemma3n:e2b-it-q4_K_M-LOPT'
-        # self.__model = 'gemma3n:e4b-it-q8_0-LOPT'
+
+        # self.__model = 'gemma3n:e2b-it-q4_K_M-LOPT'
+        self.__model = 'gemma3n:e4b-it-q8_0-LOPT'
+        # self.__model = 'gemma3:12b-it-qat-LOPT'
+        # self.__model = 'deepseek-r1:8b-0528-qwen3-q8_0-CLOPT'
+
         self.__context_length = CONST_DEFAULT_CONTEXT_LENGTH
-        self.__num_predict_summary = 512
+        self.__num_predict_summary = 768
         self.__num_predict_response = 1536
 
     @property
@@ -53,20 +61,16 @@ class KnowledgBaseHandler:
         } for r in search_results]
 
         prompt = f"""
-    <topic>
-    {topic}
-    </topic>
-    <userQuery>
-    {query}
-    </userQuery>
     <searchResults>
     {json.dumps(mapped_results)}
     </searchResults>
     """
 
+        params = {'query': query}
+        formatted_system_prompt = KNOWLEDGE_BASE_FIND_PAGE_PROMPT.format(**params)
         output = await self.__client.generate(
             model=self.__model,
-            system=KNOWLEDGE_BASE_FIND_PAGE_PROMPT,
+            system=formatted_system_prompt,
             prompt=prompt,
             think=None,
             format=LinkIdPicker.model_json_schema(),
@@ -75,21 +79,71 @@ class KnowledgBaseHandler:
 
         # Fetch the selected link by linkId
         response_dict = LinkIdPicker.model_validate_json(output.response)
-        link_id = response_dict.link_id
-        chosen_link = [l for l in search_results if l['linkId'] == link_id].pop()
-        page_url = chosen_link['url']
+        link_ids = response_dict.link_ids
+        chosen_links = [l for l in search_results if l['linkId'] in link_ids]
+        self.__logger.debug("Chosen links: %s", json.dumps(chosen_links, indent=2))
 
-        url = f"{self.__server_hostname}{page_url}"
-        # response = await asyncio.to_thread(requests.get, url)
-        # response.raise_for_status()
+        selected_article = await self.check_articles(query, chosen_links)
+        # chosen_link = chosen_links[0]
+        # page_url = chosen_link['url']
         #
-        # data = response.text
-        # soup = BeautifulSoup(data, "html.parser")
-        # content = soup.select_one("#mw-content-text")
-        # content_string = content.text
-        content_string = await asyncio.to_thread(fetch_page_content, url)
+        # url = f"{self.__server_hostname}{page_url}"
+        # # response = await asyncio.to_thread(requests.get, url)
+        # # response.raise_for_status()
+        # #
+        # # data = response.text
+        # # soup = BeautifulSoup(data, "html.parser")
+        # # content = soup.select_one("#mw-content-text")
+        # # content_string = content.text
+        # content_string = await asyncio.to_thread(fetch_page_content, url)
 
-        return chosen_link, url, content_string
+        if selected_article:
+            return selected_article  # chosen_link, url, content_string
+        else:
+            return None
+
+    async def check_articles(self, query: str, articles: list[dict]) -> Optional[dict]:
+        for article in articles:
+            reference_url = article['url']
+            parsed_url = urlparse(reference_url)
+            local_hostname = urlparse(self.__server_hostname)
+            if parsed_url.hostname and parsed_url.hostname != local_hostname.hostname:
+                raise ValueError(f'Unauthorized URL provided: {reference_url}')
+            url = f"{self.__server_hostname}{parsed_url.path}"
+            if parsed_url.fragment:
+                url += f'#{parsed_url.fragment}'
+            if parsed_url.query:
+                url += f'?{parsed_url.query}'
+
+            reference_content = await asyncio.to_thread(fetch_page_content, url)
+            article_truncated = reference_content[:self._limit_article]
+            prompt = f"""
+<article>
+{article_truncated}
+</article>
+            """
+
+            params = {'query': query}
+            system_prompt = KNOWLEDGE_BASE_CHECK_ARTICLE_PROMPT.format(**params)
+            output = await self.__client.generate(
+                model=self.__model,
+                system=system_prompt,
+                prompt=prompt,
+                think=None,
+                format=MatchResult.model_json_schema(),
+                options={"num_predict": self.__num_predict_summary, "temperature": 0.01},
+            )
+
+            result_value = MatchResult.model_validate_json(output.response)
+            if result_value.match:
+                article['content'] = article_truncated
+                article['url'] = url
+                return article
+            else:
+                self.__logger.debug("Article %s does not answer the user's query", article['title'])
+
+        return None
+
 
     async def search_topic(self, topic: str):
         params = [
@@ -226,10 +280,16 @@ class KnowledgBaseHandler:
         reference_url = summary.url
 
         if not reference_url:
-            search_url, links = await self.search_topic(summary.t)
+            search_url, links = await self.search_topic(summary.q)
             # Find matching page
-            chosen_link, reference_url, reference_content = await self.search_query(summary.t, query, links)
-            yield KnowledgeBaseSearchResponse(search_url=search_url, reference_title=chosen_link['title'], reference_url=reference_url)
+            # chosen_link, reference_url, reference_content = await self.search_query(summary.q, query, links)
+            selected_article = await self.search_query(summary.q, query, links)
+            if selected_article is None:
+                yield MardownTextResponse(text='**No match** found for this topic. You may want to verify this information from a reliable source.')
+                return  # Done
+            reference_url = selected_article['url']
+            reference_content = selected_article['content']
+            yield KnowledgeBaseSearchResponse(search_url=search_url, reference_title=selected_article['title'], reference_url=reference_url)
         else:
             parsed_url = urlparse(reference_url)
             local_hostname = urlparse(self.__server_hostname)
@@ -255,7 +315,7 @@ class KnowledgBaseHandler:
     async def run_query(self, instance: OllamaInstance, query: str) -> AsyncGenerator[MardownTextResponse, Any]:
         async for chunk in self.__process(instance, query):
             if isinstance(chunk, SummaryKeywords):
-                content = f'# Summary\n\nNotice: This **may be inaccurate** and will be double-checked further down.\n\n{chunk.s}\n\nNow looking for a reference on: **{chunk.t}**\n'
+                content = f'# Summary\n\nNotice: This **may be inaccurate** and will be double-checked further down.\n\n{chunk.s}\n\nNow looking for a reference on: **{chunk.t}**, searching using: {chunk.q}\n'
                 yield MardownTextResponse(text=content, complete_block=True)
             elif isinstance(chunk, KnowledgeBaseSearchResponse):
                 content = f'Reference: [{chunk.reference_title}]({chunk.reference_url})'

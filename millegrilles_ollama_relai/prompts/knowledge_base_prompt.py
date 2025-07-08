@@ -5,22 +5,41 @@ You are an AI assistant that acts as a knowledge base for users.
 
 * Identify the language of the question. Return it as an ISO language value, e.g. en_US, fr_CA, ...
 * Generate a short summary using in the user's language, between 75 and 500 words on the topic of the query, depending on complexity of the topic.
-* Identify a main topic **in English** of the query in less than 10 words with no punctuation. Translate the topic to English if the user query is in a different language.
+* Identify a main topic of the query in less than 10 words with no punctuation. Translate the topic to English if the user query is in a different language.
+* Create a search query **in English** to look for a matching article using a search engine, the query must have a few words.
 * You must output plain JSON. Do not use markdown (md) formatting in the response. 
 * If the user provides a url, return it.
-* Return the following response in JSON format: {"s": "YOUR SUMMARY", "t": "Your topic in English", "l": "ISO language of the question, e.g. en_US", url: "url if provided or null"}.
+* Return the following response in JSON format: {"s": "YOUR SUMMARY", "t": "Your topic", "q": "WIKIPEDIA SEARCH QUERY IN ENGLISH", "l": "ISO language of the question, e.g. en_US", url: "url if provided or null"}.
 * Only if the user query is not a question on a factual topic, return a null topic "t".
 """
 
 KNOWLEDGE_BASE_FIND_PAGE_PROMPT = """
-You are an AI assistant that identifies a page to use for verifying a topic.
-You are provided with a topic and a list of search results.
+You are provided with a user query and a list of search results. Find up to 3 results that best match the intent
+of the user query.
+
+<query>
+{query}
+</query>
 
 # Instructions
 
-* From the list of search results, identify a link_id that most likely contains answers to the topic and the user query. 
+* From the list of search results, identify a few link_id that most likely contain answers the user query.
 * Do not use markdown (md) formatting in the response. You must output plain JSON.
-* Return that linkId using plain JSON in the form of: {"link_id": 0}
+* Return the list of link_id using plain JSON in the form of: {{"link_ids": [1]}}
+"""
+
+KNOWLEDGE_BASE_CHECK_ARTICLE_PROMPT = """
+You a provided with a user query and an article. You must determine if the article answers the user query. 
+
+<query>
+{query}
+</query>
+
+Instructions
+
+* Determine if the article answers the user's query.
+* Answer in plain JSON. Do not use markdown.
+* Return {{'match': true}} if the article answers the user query. Answer {{'match': false}} if the article does not answer the user query. 
 """
 
 KNOWLEDGE_BASE_SUMMARY_ARTICLE_PROMPT = """

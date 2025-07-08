@@ -12,12 +12,13 @@ class SummaryText(BaseModel):
 class SummaryKeywords(BaseModel):
     s: str
     t: Optional[str]
+    q: Optional[str]
     l: str
     url: Optional[str]
 
 
 class LinkIdPicker(BaseModel):
-    link_id: int
+    link_ids: list[int]
 
 
 class MardownTextResponse:
@@ -33,3 +34,7 @@ class KnowledgeBaseSearchResponse:
         self.search_url = search_url
         self.reference_title = reference_title
         self.reference_url = reference_url
+
+
+class MatchResult(BaseModel):
+    match: bool
