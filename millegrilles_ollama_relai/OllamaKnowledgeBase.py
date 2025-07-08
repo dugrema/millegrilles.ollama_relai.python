@@ -28,8 +28,9 @@ class KnowledgBaseHandler:
         self.__client = client
         self.__server_hostname = 'https://libs.millegrilles.com'
 
-        # self.__model = 'gemma3n:e2b-it-q4_K_M-LOPT'
-        self.__model = 'gemma3n:e4b-it-q8_0-LOPT'
+        self.__model = 'gemma3n:e2b-it-q4_K_M-LOPT'
+        # self.__model = 'gemma3n:e4b-it-q8_0-LOPT'
+        # self.__model = 'gemma3n:e4b-it-fp16-LOPT'
         # self.__model = 'gemma3:12b-it-qat-LOPT'
         # self.__model = 'deepseek-r1:8b-0528-qwen3-q8_0-CLOPT'
 
