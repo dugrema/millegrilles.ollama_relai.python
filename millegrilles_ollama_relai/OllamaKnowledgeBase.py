@@ -11,6 +11,7 @@ from typing import AsyncGenerator, Any, Union, Optional
 from bs4 import BeautifulSoup
 from ollama import GenerateResponse, AsyncClient
 
+from millegrilles_ollama_relai.OllamaContext import OllamaContext
 from millegrilles_ollama_relai.OllamaInstanceManager import OllamaInstance
 from millegrilles_ollama_relai.Structs import SummaryKeywords, LinkIdPicker, KnowledgeBaseSearchResponse, \
     MardownTextResponse, MatchResult
@@ -21,18 +22,17 @@ from millegrilles_ollama_relai.prompts.knowledge_base_prompt import KNOWLEDGE_BA
 
 CONST_DEFAULT_CONTEXT_LENGTH = 8192
 
+CONST_KIWIX_WIKIPEDIA_EN_SEARCH_LABEL = 'kiwixWikipediaEnSearch'
+
 class KnowledgBaseHandler:
 
-    def __init__(self, client: AsyncClient):
+    def __init__(self, context: OllamaContext, client: AsyncClient):
         self.__logger = logging.getLogger(__name__ + '.' + self.__class__.__name__)
+        self.__context = context
         self.__client = client
-        self.__server_hostname = 'https://libs.millegrilles.com'
+        # self.__server_hostname = 'https://libs.millegrilles.com'
 
-        self.__model = 'gemma3n:e2b-it-q4_K_M-LOPT'
-        # self.__model = 'gemma3n:e4b-it-q8_0-LOPT'
-        # self.__model = 'gemma3n:e4b-it-fp16-LOPT'
-        # self.__model = 'gemma3:12b-it-qat-LOPT'
-        # self.__model = 'deepseek-r1:8b-0528-qwen3-q8_0-CLOPT'
+        self.__model = context.model_configuration.get('knowledge_model_name') or context.chat_configuration['default_model']
 
         self.__context_length = CONST_DEFAULT_CONTEXT_LENGTH
         self.__num_predict_summary = 768
@@ -107,10 +107,10 @@ class KnowledgBaseHandler:
         for article in articles:
             reference_url = article['url']
             parsed_url = urlparse(reference_url)
-            local_hostname = urlparse(self.__server_hostname)
+            local_hostname = urlparse(self.__context.url_configuration['urls'][CONST_KIWIX_WIKIPEDIA_EN_SEARCH_LABEL])
             if parsed_url.hostname and parsed_url.hostname != local_hostname.hostname:
                 raise ValueError(f'Unauthorized URL provided: {reference_url}')
-            url = f"{self.__server_hostname}{parsed_url.path}"
+            url = f"{local_hostname.scheme}://{local_hostname.hostname}{parsed_url.path}"
             if parsed_url.fragment:
                 url += f'#{parsed_url.fragment}'
             if parsed_url.query:
@@ -147,16 +147,20 @@ class KnowledgBaseHandler:
 
 
     async def search_topic(self, topic: str):
-        params = [
-            "books.name=wikipedia_en_all_maxi_2023-11",
-            # f"pattern={urllib.parse.quote_plus(", ".join(keywords))}",
-            f"pattern={urllib.parse.quote_plus(topic)}",
-            "userlang=en",
-            "start=1",
-            "pageLength=30",
-        ]
+        search_url = self.__context.url_configuration['urls'][CONST_KIWIX_WIKIPEDIA_EN_SEARCH_LABEL]
+        params = {'query': urllib.parse.quote_plus(topic)}
+        search_url = search_url.format(**params)
+
+        # params = [
+        #     "books.name=wikipedia_en_all_maxi_2023-11",
+        #     # f"pattern={urllib.parse.quote_plus(", ".join(keywords))}",
+        #     f"pattern={urllib.parse.quote_plus(topic)}",
+        #     "userlang=en",
+        #     "start=1",
+        #     "pageLength=30",
+        # ]
         params = "&".join(params)
-        search_url = f"{self.__server_hostname}/kiwix/search?{params}"
+        # search_url = f"{self.__server_hostname}/kiwix/search?{params}"
 
         response = await asyncio.to_thread(requests.get, search_url)
         response.raise_for_status()
@@ -293,10 +297,10 @@ class KnowledgBaseHandler:
             yield KnowledgeBaseSearchResponse(search_url=search_url, reference_title=selected_article['title'], reference_url=reference_url)
         else:
             parsed_url = urlparse(reference_url)
-            local_hostname = urlparse(self.__server_hostname)
+            local_hostname = urlparse(self.__context.url_configuration['urls'][CONST_KIWIX_WIKIPEDIA_EN_SEARCH_LABEL])
             if parsed_url.hostname and parsed_url.hostname != local_hostname.hostname:
                 raise ValueError(f'Unauthorized URL provided: {reference_url}')
-            url = f"{self.__server_hostname}{parsed_url.path}"
+            url = f"{local_hostname.scheme}://{local_hostname.hostname}{parsed_url.path}"
             if parsed_url.fragment:
                 url += f'#{parsed_url.fragment}'
             if parsed_url.query:

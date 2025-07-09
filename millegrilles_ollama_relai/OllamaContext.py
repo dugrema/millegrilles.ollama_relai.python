@@ -15,6 +15,13 @@ class ChatConfiguration(TypedDict):
     default_model: Optional[str]
     chat_context_length: Optional[int]
 
+class ModelConfiguration(TypedDict):
+    chat_model_name: Optional[str]
+    knowledge_model_name: Optional[str]
+    vision_model_name: Optional[str]
+    embedding_model_name: Optional[str]
+    rag_query_model_name: Optional[str]
+
 class RagConfiguration(TypedDict):
     model_embedding_name: Optional[str]
     model_query_name: Optional[str]
@@ -22,6 +29,9 @@ class RagConfiguration(TypedDict):
     context_len: Optional[int]
     document_chunk_len: Optional[int]
     document_overlap_len: Optional[int]
+
+class UrlConfiguration(TypedDict):
+    urls: Optional[dict[str, str]]
 
 
 class OllamaContext(MilleGrillesBusContext):
@@ -32,8 +42,10 @@ class OllamaContext(MilleGrillesBusContext):
         # self.__bus_connector: Optional[MilleGrillesPikaConnector] = None
 
         self.ai_configuration_loaded = asyncio.Event()
+        self.model_configuration: Optional[ModelConfiguration] = None
         self.rag_configuration: Optional[RagConfiguration] = None
         self.chat_configuration: Optional[ChatConfiguration] = None
+        self.url_configuration: Optional[UrlConfiguration] = None
 
     @property
     def configuration(self) -> OllamaConfiguration:

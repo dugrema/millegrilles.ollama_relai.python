@@ -96,7 +96,7 @@ class DocumentIndexHandler:
         producer = await self.__context.get_producer()
 
         # Re-emit the message on the model's process Q
-        query_model = self.__context.rag_configuration['model_query_name']
+        query_model = self.__context.model_configuration['rag_query_model_name']
         model_id = model_name_to_id(query_model)
 
         # attachements = {'correlation_id': message.correlation_id, 'reply_to': message.reply_to}
@@ -140,14 +140,15 @@ class DocumentIndexHandler:
         if user_id is None:
             return {'ok': False, 'code': 403, 'err': 'Access denied, no user_id in certificate'}
 
+        model_configuration = self.__context.model_configuration
         rag_configuration = self.__context.rag_configuration
-        if rag_configuration is None:
-            raise Exception("No RAG configuration provided - configure it with MilleGrilles AiChat")
+        if model_configuration is None or rag_configuration is None:
+            raise Exception("No Model/RAG configuration provided - configure it with MilleGrilles AiChat")
 
-        query_model = rag_configuration['model_query_name']
-        embedding_model = rag_configuration['model_embedding_name']
+        query_model = model_configuration['rag_query_model_name']
+        embedding_model = model_configuration['embedding_model_name']
         context_len = rag_configuration.get('context_len')
-        doc_chunk_len = rag_configuration.get('document_chunk_len')
+        doc_chunk_len = rag_configuration['document_chunk_len']
 
         async with instance.semaphore:
             vector_store = await asyncio.to_thread(self.open_vector_store, Constantes.DOMAINE_GROS_FICHIERS, user_id, instance, embedding_model)
@@ -225,8 +226,8 @@ class DocumentIndexHandler:
                     if self.__context.configuration.summary_active:
                         try:
                             # Ensure that the summary model is available locally
-                            rag_configuration = self.__context.rag_configuration
-                            embedding_model = rag_configuration['model_query_name']
+                            model_configuration = self.__context.model_configuration
+                            embedding_model = model_configuration['embedding_model_name']
                             _instance = self.__ollama_instances.pick_instance_for_model(embedding_model)
                             lease_actions.append(CONST_ACTION_SUMMARY)
                         except (TypeError, KeyError) as e:
@@ -235,8 +236,8 @@ class DocumentIndexHandler:
                     if self.__context.configuration.rag_active:
                         try:
                             # Ensure that the RAG model is available locally
-                            rag_configuration = self.__context.rag_configuration
-                            embedding_model = rag_configuration['model_embedding_name']
+                            model_configuration = self.__context.model_configuration
+                            embedding_model = model_configuration['embedding_model_name']
                             _instance = self.__ollama_instances.pick_instance_for_model(embedding_model)
                             lease_actions.append(CONST_ACTION_RAG)
                         except (TypeError, KeyError) as e:
@@ -411,6 +412,7 @@ class DocumentIndexHandler:
                 await self.__cancel_job(job)
 
     async def __run_rag_indexing(self, job: FileInformation, tmp_file: tempfile.NamedTemporaryFile):
+        model_configuration = self.__context.model_configuration
         rag_configuration = self.__context.rag_configuration
         if rag_configuration is None:
             raise Exception("No RAG configuration provided - configure it with MilleGrilles AiChat")
@@ -427,7 +429,7 @@ class DocumentIndexHandler:
         except (TypeError, KeyError):
             filename = tuuid
 
-        embedding_model = rag_configuration['model_embedding_name']
+        embedding_model = model_configuration['model_embedding_name']
         instance = self.__ollama_instances.pick_instance_for_model(embedding_model)
         if instance is None:
             raise Exception(f'Unsupported model: {embedding_model}')
@@ -454,15 +456,16 @@ class DocumentIndexHandler:
 
     async def __run_summarize_file(self, job: FileInformation, tmp_file: tempfile.NamedTemporaryFile):
         llm_configuration = self.__context.chat_configuration
+        model_configuration = self.__context.model_configuration
         rag_configuration = self.__context.rag_configuration
         if rag_configuration is None:
             raise Exception("No RAG configuration provided - configure it with MilleGrilles AiChat")
 
         job_type = job['job_type']
         if job_type in [CONST_JOB_RAG, CONST_JOB_SUMMARY_TEXT]:
-            model = rag_configuration.get('model_query_name') or llm_configuration['default_model']
+            model = model_configuration.get('rag_query_model_name') or llm_configuration['default_model']
         elif job_type == CONST_JOB_SUMMARY_IMAGE:
-            model = rag_configuration.get('model_vision_name') or rag_configuration.get('model_query_name') or llm_configuration['default_model']
+            model = model_configuration.get('vision_model_name') or model_configuration.get('rag_query_model_name') or llm_configuration['default_model']
         else:
             raise ValueError(f'Unsupported job type: {job_type}')
 

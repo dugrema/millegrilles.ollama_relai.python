@@ -326,11 +326,23 @@ class OllamaInstanceManager:
             group.create_task(self.__query_cache_maintenance_thread())
             group.create_task(self.__maintain_redis())
             group.create_task(self.__stop_thread())
+            group.create_task(self.__cleanup_stop())
 
         # Cleanup. Expire locks
-        for instance in self.__instances:
-            await self.__expire_instance_lock(instance.url)
         self.__group = None
+
+    async def __cleanup_stop(self):
+        """
+        Release all instances locked in redis
+        :return:
+        """
+        async def shielded_stop():
+            await self.__context.wait()
+            for instance in self.__instances:
+                if instance.ready():
+                    self.__logger.info(f"Releasing {instance.url}")
+                    await self.__expire_instance_lock(instance.url)
+        await asyncio.shield(shielded_stop())
 
     async def __maintain_instance_list_thread(self):
         await self.__context.ai_configuration_loaded.wait()

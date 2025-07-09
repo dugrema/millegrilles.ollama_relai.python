@@ -12,7 +12,7 @@ from millegrilles_messages.structs.Filehost import Filehost
 from millegrilles_messages.Filehost import FilehostConnection
 from millegrilles_ollama_relai.DocumentIndexHandler import DocumentIndexHandler
 from millegrilles_ollama_relai.OllamaChatHandler import OllamaChatHandler
-from millegrilles_ollama_relai.OllamaContext import OllamaContext, RagConfiguration
+from millegrilles_ollama_relai.OllamaContext import OllamaContext, RagConfiguration, UrlConfiguration
 from millegrilles_ollama_relai.OllamaInstanceManager import OllamaInstanceManager, OllamaInstance
 from millegrilles_ollama_relai.OllamaTools import OllamaToolHandler
 
@@ -155,6 +155,13 @@ class OllamaManager:
             self.__context.chat_configuration = chat_configuration
 
         try:
+            model_configuration = parsed['models']
+        except (TypeError, KeyError):
+            self.__context.model_configuration = None  # No information
+        else:
+            self.__context.model_configuration = model_configuration
+
+        try:
             urls = parsed['ollama_urls']['urls']
         except (TypeError, KeyError):
             pass  # No URL information
@@ -167,6 +174,13 @@ class OllamaManager:
             self.__context.rag_configuration = None  # No information
         else:
             self.__context.rag_configuration = rag_configuration
+
+        try:
+            url_configuration: UrlConfiguration = parsed['urls']
+        except (TypeError, KeyError):
+            self.__context.url_configuration = None  # No information
+        else:
+            self.__context.url_configuration = url_configuration
 
         # For initial configuration load
         self.__context.ai_configuration_loaded.set()

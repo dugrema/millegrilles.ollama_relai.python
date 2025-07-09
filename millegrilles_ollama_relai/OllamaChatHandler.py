@@ -536,7 +536,7 @@ class OllamaChatHandler:
 
     async def knowledge_chat(self, instance: OllamaInstance, user_profile: dict, current_message_content: str):
         client = instance.get_async_client(self.__context.configuration)
-        knowledge_base_handler = KnowledgBaseHandler(client)
+        knowledge_base_handler = KnowledgBaseHandler(self.__context, client)
         async for chunk in knowledge_base_handler.run_query(instance, current_message_content):
             yield chunk
 
