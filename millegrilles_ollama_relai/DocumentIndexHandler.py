@@ -45,7 +45,7 @@ CONST_JOB_RAG = 'rag'
 CONST_JOB_SUMMARY_TEXT = 'summaryText'
 CONST_JOB_SUMMARY_IMAGE = 'summaryImage'
 CONST_CHAR_MULTIPLIER = 4.5
-CONST_SUMMARY_NUM_PREDICT = 1536
+CONST_SUMMARY_NUM_PREDICT = 2048
 
 
 class FileInformation(TypedDict):
@@ -63,8 +63,9 @@ class FileInformation(TypedDict):
     key: Optional[dict]
     decrypted_metadata: Optional[dict]
     tmp_file: Optional[tempfile.NamedTemporaryFile]
+    image_tmp_file: Optional[tempfile.NamedTemporaryFile]
     media: Optional[dict]
-    file: Optional[dict]
+    image_file: Optional[dict]
 
 QUERY_BATCH_RAG_LEN = 30
 # CONTEXT_LEN = 4096
@@ -243,7 +244,6 @@ class DocumentIndexHandler:
                         except (TypeError, KeyError) as e:
                             self.__logger.debug(f"RAG configuration not initialized yet: {e}")
 
-
                     for lease_action in lease_actions:
                         # Try to fetch more items
                         self.__logger.debug("Triggering fetch of new batch of files for RAG/Summary (low/empty intake queue)")
@@ -301,55 +301,86 @@ class DocumentIndexHandler:
                 self.__context.stop()
             else:
                 if job_type and fuuid:  # Job to do, download file
-                    tmp_file = tempfile.NamedTemporaryFile(mode='wb+')
-
-                    file_to_download = job.get('file')
+                    image_file_to_download = job.get('image_file')
+                    file_to_download: Optional[dict] = None
+                    tmp_file = None
+                    image_tmp_file = None
                     try:
                         key = job['key']
 
+                        # Special case - a PDF file will have both image and original file
+                        mimetype = job['mimetype']
+                        override_get_original = mimetype in ['application/pdf']
+
                         # Combine version and key to ensure legacy decryption info is available
-                        if file_to_download is None:
+                        if image_file_to_download is None or override_get_original:
                             # This is a standard file, use legacy key fallback approach
                             file_to_download = version.copy()
                             nonce = file_to_download.get('nonce') or key.get('nonce')
                             if nonce is None:
                                 header = file_to_download.get('header') or key.get('header')
                                 nonce = header[1:]
+
+                            # Override the nonce to ensure the proper value is used
+                            file_to_download['nonce'] = nonce
+
+                            # info_decryption.update(job['key'])
+                            file_to_download['format'] = file_to_download.get('format') or key.get(
+                                'format') or 'mgs4'  # Default format
                         else:
                             # This is an attached/generated file, e.g. media
                             try:
-                                nonce = file_to_download['nonce']
+                                nonce = image_file_to_download['nonce']
                             except KeyError:
-                                nonce = file_to_download['header'][1:]
+                                nonce = image_file_to_download['header'][1:]
 
-                        # Override the nonce to ensure the proper value is used
-                        file_to_download['nonce'] = nonce
+                            # Override the nonce to ensure the proper value is used
+                            image_file_to_download['nonce'] = nonce
 
-                        # info_decryption.update(job['key'])
-                        file_to_download['format'] = file_to_download.get('format') or key.get('format') or 'mgs4'  # Default format
+                            # info_decryption.update(job['key'])
+                            image_file_to_download['format'] = image_file_to_download.get('format') or key.get('format') or 'mgs4'  # Default format
 
-                        # For media encoded thumbnails/images, need to stick to file_to_download
-                        try:
-                            filesize = await self.__attachment_handler.download_decrypt_file(secret_key_str, file_to_download, tmp_file)
-                            self.__logger.debug(f"Downloaded {filesize} bytes for file {filename}")
-                        except* asyncio.CancelledError:
-                            raise Exception(f"Error downloading fuuid {fuuid}, will retry")
+                        if file_to_download:
+                            tmp_file = tempfile.NamedTemporaryFile(mode='wb+')
+                            await self.__download_file(filename, fuuid, secret_key_str, file_to_download, tmp_file)
+                            # Process decrypted file
+                            tmp_file.seek(0)
+                            job['tmp_file'] = tmp_file
+
+                        if image_file_to_download:
+                            image_tmp_file = tempfile.NamedTemporaryFile(mode='wb+')
+                            await self.__download_file(filename, fuuid, secret_key_str, image_file_to_download, image_tmp_file)
+                            # Process decrypted file
+                            image_tmp_file.seek(0)
+                            job['image_tmp_file'] = image_tmp_file
+
                     except nacl.exceptions.RuntimeError as e:
-                        tmp_file.close()
-                        self.__logger.error(f"Error decrypting fuuid {fuuid}, params nonce:{file_to_download} CANCELLING: {e}")
+                        if tmp_file:
+                            tmp_file.close()
+                        if image_tmp_file:
+                            image_tmp_file.close()
+                        self.__logger.error(f"Error decrypting fuuid {fuuid}, params nonce:{image_file_to_download} CANCELLING: {e}")
                         await self.__cancel_job(job)
                         continue
                     except:
-                        tmp_file.close()
+                        if tmp_file:
+                            tmp_file.close()
+                        if image_tmp_file:
+                            image_tmp_file.close()
                         self.__logger.exception(f"Error downloading fuuid {fuuid}, will retry")
                         continue  # Ignore this file for now, don't mark it processed
 
-                    # Process decrypted file
-                    tmp_file.seek(0)
-                    job['tmp_file'] = tmp_file
-
             # Pass content on to indexing
             await self.__indexing_queue.put(job)
+
+    async def __download_file(self, filename: str, fuuid: str, secret_key_str: str, file_to_download: dict, tmp_file: tempfile.TemporaryFile):
+        # For media encoded thumbnails/images, need to stick to file_to_download
+        try:
+            filesize = await self.__attachment_handler.download_decrypt_file(
+                secret_key_str, file_to_download, tmp_file)
+            self.__logger.debug(f"Downloaded {filesize} bytes for file {filename}")
+        except* asyncio.CancelledError:
+            raise Exception(f"Error downloading fuuid {fuuid}, will retry")
 
     async def __cancel_job(self, job: FileInformation):
         lease_action = job['lease_action']
@@ -377,9 +408,10 @@ class DocumentIndexHandler:
             job_type = job['job_type']
 
             tmp_file = job.get('tmp_file')
+            image_tmp_file = job.get('image_tmp_file')
             tuuid = job.get('tuuid')
             fuuid = job.get('fuuid')
-            if tmp_file:
+            if tmp_file or image_tmp_file:
                 try:
                     rag_configuration = self.__context.rag_configuration
                     if rag_configuration is None:
@@ -387,9 +419,10 @@ class DocumentIndexHandler:
 
                     try:
                         if job_type == CONST_JOB_RAG:
-                            await self.__run_rag_indexing(job, tmp_file)
+                            if tmp_file:
+                                await self.__run_rag_indexing(job, tmp_file)
                         elif job_type in [CONST_JOB_SUMMARY_TEXT, CONST_JOB_SUMMARY_IMAGE]:
-                            await self.__run_summarize_file(job, tmp_file)
+                            await self.__run_summarize_file(job, tmp_file, image_tmp_file)
                         else:
                             self.__logger.error(f"Unknown job type {job_type}, CANCELLING for tuuid:{tuuid}/fuuid:{fuuid}")
                             await self.__cancel_job(job)
@@ -406,7 +439,10 @@ class DocumentIndexHandler:
                     continue
                 finally:
                     self.__logger.debug("Closing tmp file")
-                    tmp_file.close()
+                    if tmp_file:
+                        tmp_file.close()
+                    if image_tmp_file:
+                        image_tmp_file.close()
             else:
                 # Nothing to do
                 await self.__cancel_job(job)
@@ -454,7 +490,7 @@ class DocumentIndexHandler:
                 self.__logger.warning("Timeout sending RAG result, will retry")
                 await self.__context.wait(5)
 
-    async def __run_summarize_file(self, job: FileInformation, tmp_file: tempfile.NamedTemporaryFile):
+    async def __run_summarize_file(self, job: FileInformation, tmp_file: tempfile.NamedTemporaryFile, image_tmp_file: tempfile.NamedTemporaryFile()):
         llm_configuration = self.__context.chat_configuration
         model_configuration = self.__context.model_configuration
         rag_configuration = self.__context.rag_configuration
@@ -463,9 +499,9 @@ class DocumentIndexHandler:
 
         job_type = job['job_type']
         if job_type in [CONST_JOB_RAG, CONST_JOB_SUMMARY_TEXT]:
-            model = model_configuration.get('rag_query_model_name') or llm_configuration['default_model']
+            model = model_configuration.get('summary_model_name') or llm_configuration['default_model']
         elif job_type == CONST_JOB_SUMMARY_IMAGE:
-            model = model_configuration.get('vision_model_name') or model_configuration.get('rag_query_model_name') or llm_configuration['default_model']
+            model = model_configuration.get('vision_model_name') or model_configuration.get('summary_model_name') or llm_configuration['default_model']
         else:
             raise ValueError(f'Unsupported job type: {job_type}')
 
@@ -475,6 +511,7 @@ class DocumentIndexHandler:
 
         instance_model = instance.get_model(model)
         context_length = instance_model.context_length
+        supports_vision = 'vision' in instance_model.capabilities
 
         encryption_key = job['key']
         secret_key: bytes = decode_base64_nopad(encryption_key['cle_secrete_base64'])
@@ -484,19 +521,30 @@ class DocumentIndexHandler:
             # Make a few attempts to generate valid JSON, increase the temperature each time to vary the result.
             temperature = 0.1
             for i in range(0, 2):
-                tmp_file.seek(0)  # Ensure file pointer is reset
+                # Ensure file pointers are reset
+                if tmp_file:
+                    tmp_file.seek(0)
+                if image_tmp_file:
+                    image_tmp_file.seek(0)
+
                 try:
                     client = instance.get_async_client(self.__context.configuration)
-                    summary = await summarize_file(client, job, model, tmp_file, context_len=context_length, temperature=temperature)
+                    summary = await summarize_file(client, job, model, tmp_file, image_tmp_file, context_len=context_length, temperature=temperature, vision=supports_vision)
                     break
                 except ValidationError as e:
                     self.__logger.warning(f"JSON validation error on generate response for file tuuid:{job.get('tuuid')}/fuuid:{job.get('fuuid')} (temperature: {temperature}): {e}")
                     temperature += 0.2
             else:
                 # Unable to get a structured JSON summary output, revert to string output
-                tmp_file.seek(0)  # Ensure file pointer is reset
-                summary = await summarize_file(client, job, model, tmp_file,
-                                               context_len=context_length, temperature=0.0, noformat=True)
+
+                # Ensure file pointers are reset
+                if tmp_file:
+                    tmp_file.seek(0)
+                if image_tmp_file:
+                    image_tmp_file.seek(0)
+
+                summary = await summarize_file(client, job, model, tmp_file, image_tmp_file,
+                                               context_len=context_length, temperature=0.0, noformat=True, vision=supports_vision)
                 # raise FatalSummaryException(f'Unable to get a valid JSON output for file tuuid:{job.get('tuuid')}/fuuid:{job.get('fuuid')}')
 
         # Encrypt result
@@ -605,15 +653,17 @@ class DocumentIndexHandler:
                 elif mimetype.startswith('image/'):
                     job_type = CONST_JOB_SUMMARY_IMAGE
                     # Check to find a webp fuuid, will be smaller and easier to digest
-                    try:
-                        images = media['images']
-                        webp_img = [m for m in images.keys() if m.startswith('image/webp')].pop()
-                        image_file = images[webp_img]
-                        image_file['fuuid'] = image_file['hachage']
-                    except (AttributeError, IndexError, TypeError):
-                        pass
                 else:
                     job_type = None
+
+                try:
+                    images = media['images']
+                    webp_img = [m for m in images.keys() if m.startswith('image/webp')].pop()
+                    image_file = images[webp_img]
+                    image_file['fuuid'] = image_file['hachage']
+                except (AttributeError, IndexError, TypeError):
+                    pass
+
             else:
                 job_type = None
 
@@ -633,7 +683,7 @@ class DocumentIndexHandler:
                 'tmp_file': None,
                 'decrypted_metadata': None,
                 'media': lease.get('media'),
-                'file': image_file,
+                'image_file': image_file,
             }
 
             await self.__intake_queue.put(info)
@@ -694,7 +744,8 @@ def index_pdf_file(vector_store: VectorStore, tuuid: str, filename: str, cuuids:
 
 
 async def summarize_file(client: AsyncClient, job: FileInformation, model: str,
-                         tmp_file: tempfile.NamedTemporaryFile, context_len=4096, temperature=0.0, noformat=False) -> SummaryText:
+                         tmp_file: tempfile.NamedTemporaryFile, image_tmp_file: tempfile.NamedTemporaryFile,
+                         context_len=4096, temperature=0.0, noformat=False, vision=False) -> SummaryText:
     job_type = job['job_type']
     language = job['language']
 
@@ -703,18 +754,32 @@ async def summarize_file(client: AsyncClient, job: FileInformation, model: str,
     else:
         format = SummaryText.model_json_schema()
 
-    if job_type == CONST_JOB_SUMMARY_TEXT:
-        system_prompt, command_prompt = await format_text_prompt(language, context_len, job['mimetype'], tmp_file)
+    if job_type == CONST_JOB_SUMMARY_TEXT and tmp_file:
+        tmp_file.seek(0)
+        effective_context = context_len
+        if vision and image_tmp_file:
+            # Also add image, can help with PDFs that have no text content
+            image_tmp_file.seek(0)
+            image_content = await asyncio.to_thread(image_tmp_file.read)
+            image_tmp_file.seek(0)
+            images = [image_content]
+            effective_context -= 512  # Give enough space for the image
+        else:
+            images = None
+
+        system_prompt, command_prompt = await format_text_prompt(language, effective_context, job['mimetype'], tmp_file)
+
         response = await client.generate(
             model=model,
             prompt=command_prompt,
             system=system_prompt,
             format=format,
+            images=images,
             options={"temperature": temperature, "num_ctx": context_len, "num_predict": CONST_SUMMARY_NUM_PREDICT}
         )
-    elif job_type == CONST_JOB_SUMMARY_IMAGE:
+    elif job_type == CONST_JOB_SUMMARY_IMAGE and image_tmp_file:
         system_prompt, command_prompt = await format_image_prompt(language)
-        image_content = await asyncio.to_thread(tmp_file.read)
+        image_content = await asyncio.to_thread(image_tmp_file.read)
         response = await client.generate(
             model=model,
             prompt=command_prompt,
