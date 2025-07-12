@@ -19,6 +19,7 @@ from millegrilles_messages.messages import Constantes as ConstantesMilleGrilles
 from millegrilles_messages.messages.EnveloppeCertificat import EnveloppeCertificat
 from millegrilles_messages.messages.MessagesModule import MessageWrapper
 from millegrilles_messages.Filehost import FilehostConnection
+from millegrilles_ollama_relai.InstancesDao import OllamaChatResponseWrapper
 from millegrilles_ollama_relai.OllamaContext import OllamaContext
 from millegrilles_messages.chiffrage.Mgs4 import chiffrer_mgs4_bytes_secrete
 from millegrilles_messages.chiffrage.DechiffrageUtils import dechiffrer_bytes_secrete, dechiffrer_document_secrete
@@ -347,7 +348,7 @@ class OllamaChatHandler:
                 pass  # Ok, could have been cancelled
 
     async def stream_chat_response(self, chat_id: str, output: dict, enveloppe: EnveloppeCertificat, correlation_id: str,
-                                   reply_to: str, chat_stream: AsyncGenerator[ChatResponse, Any]):
+                                   reply_to: str, chat_stream: AsyncGenerator[OllamaChatResponseWrapper, Any]):
         producer = await self.__context.get_producer()
         emit_interval = datetime.timedelta(milliseconds=750)
         next_emit = datetime.datetime.now() + emit_interval
@@ -359,8 +360,8 @@ class OllamaChatHandler:
         output['content'] = complete_response
         output['complete'] = False
         async for chunk in chat_stream:
-            chunk = dict(chunk)
-            chunk['message'] = dict(chunk['message'])
+            # chunk['message'] = dict(chunk['message'])
+            chunk = chunk.to_dict()
 
             try:
                 # Stop emitting keep-alive messages
@@ -456,7 +457,11 @@ class OllamaChatHandler:
         await producer.encrypt_reply([enveloppe], event, correlation_id=correlation_id, reply_to=reply_to, attachments={'streaming': True})
 
     async def ollama_chat(self, instance: OllamaInstance, user_profile: dict, messages: list[dict], model: str):
-        client = instance.get_async_client(self.__context.configuration, timeout=180)
+        # client = instance.get_async_client(self.__context.configuration, timeout=180)
+        if not instance.ready:
+            raise Exception('Connection not ready')
+
+        client_connection = instance.connection
         # context_len = self.__context.chat_configuration.get('chat_context_length') or 4096
 
         # Check if the model supports tools
@@ -489,13 +494,12 @@ class OllamaChatHandler:
                     tools = None
 
                 # Chat request to ollama
-                stream = await client.chat(
+                stream = await client_connection.chat(
                     model=model,
                     messages=messages,
                     tools=tools,
                     stream=True,
                     think=think,
-                    # options={"num_ctx": context_len, "num_gpu": 18}
                 )
 
                 # Keep the streaming output for tool calls
@@ -504,7 +508,7 @@ class OllamaChatHandler:
                 tools_called = False
 
                 async for part in stream:
-                    if part.message.tool_calls:
+                    if part.message.get('tool_calls'):
                         # Tools are being invoked. Keep history of output for assistant.
                         if len(cumulative_output) > 0 or len(cumulative_thinking) > 0:
                             messages.append({'role': 'assistant', 'content': cumulative_output, 'thinking': cumulative_thinking})
@@ -522,20 +526,21 @@ class OllamaChatHandler:
                             messages.append({'role': 'tool', 'content': str(output), 'name': tool_call.function.name})
                             tools_called = True
 
-                    cumulative_output += part.message.content
+                    cumulative_output += part.message['content']
                     try:
-                        cumulative_thinking += part.message.thinking
+                        cumulative_thinking += part.message.get('thinking')
                     except TypeError:
                         pass
 
                     yield part
 
                 # If no tools were called, the chat is done. If we have tool responses, loop for a new iteration.
-                if tools_called is False:
+                if not tools_called:
                     break  # Done
 
     async def knowledge_chat(self, instance: OllamaInstance, user_profile: dict, current_message_content: str):
-        client = instance.get_async_client(self.__context.configuration)
+        # client = instance.get_async_client(self.__context.configuration)
+        client = instance.connection
         knowledge_base_handler = KnowledgBaseHandler(self.__context, client)
         async for chunk in knowledge_base_handler.run_query(instance, current_message_content):
             yield chunk

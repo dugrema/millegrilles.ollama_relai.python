@@ -28,6 +28,7 @@ from millegrilles_messages.chiffrage.Mgs4 import chiffrer_mgs4_bytes_secrete
 from millegrilles_messages.messages import Constantes
 from millegrilles_messages.messages.MessagesModule import MessageWrapper
 from millegrilles_messages.Filehost import FilehostConnection
+from millegrilles_ollama_relai.InstancesDao import InstanceDao
 
 from millegrilles_ollama_relai.OllamaContext import OllamaContext
 from millegrilles_ollama_relai.OllamaInstanceManager import OllamaInstance, model_name_to_id, OllamaInstanceManager
@@ -162,7 +163,8 @@ class DocumentIndexHandler:
                 # No filter
                 retriever = vector_store.as_retriever()
 
-            client = instance.get_async_client(self.__context.configuration)
+            # client = instance.get_async_client(self.__context.configuration)
+            client = instance.connection
             # Calculate doc limit using ~2 * context chars
             limit = math.floor(context_len * 2.5 / doc_chunk_len)
             try:
@@ -176,12 +178,13 @@ class DocumentIndexHandler:
                 # prompt=system_prompt + "\n" + command_prompt,
                 prompt=command_prompt,
                 system=system_prompt,
-                options={"temperature": 0.0, "num_ctx": context_len}
+                max_len=context_len,
+                temperature=0.0,
             )
 
-        self.__logger.debug("Response: %s" % response['response'])
+        self.__logger.debug("Response: %s" % response.message['content'])
 
-        response = {'ok': True, 'response': response['response'], 'ref': doc_ref}
+        response = {'ok': True, 'response': response.message['content'], 'ref': doc_ref}
         producer = await self.__context.get_producer()
         await producer.encrypt_reply([message.certificat], response,
                                      correlation_id=message.correlation_id,
@@ -520,6 +523,7 @@ class DocumentIndexHandler:
         async with instance.semaphore:
             # Make a few attempts to generate valid JSON, increase the temperature each time to vary the result.
             temperature = 0.1
+            client = instance.connection
             for i in range(0, 2):
                 # Ensure file pointers are reset
                 if tmp_file:
@@ -528,7 +532,7 @@ class DocumentIndexHandler:
                     image_tmp_file.seek(0)
 
                 try:
-                    client = instance.get_async_client(self.__context.configuration)
+                    # client = instance.get_async_client(self.__context.configuration)
                     summary = await summarize_file(client, job, model, tmp_file, image_tmp_file, context_len=context_length, temperature=temperature, vision=supports_vision)
                     break
                 except ValidationError as e:
@@ -681,6 +685,7 @@ class DocumentIndexHandler:
                 'version': lease.get('version'),
                 'key': key,
                 'tmp_file': None,
+                'image_tmp_file': None,
                 'decrypted_metadata': None,
                 'media': lease.get('media'),
                 'image_file': image_file,
@@ -743,7 +748,7 @@ def index_pdf_file(vector_store: VectorStore, tuuid: str, filename: str, cuuids:
     vector_store.add_documents(list(chunks))
 
 
-async def summarize_file(client: AsyncClient, job: FileInformation, model: str,
+async def summarize_file(client: InstanceDao, job: FileInformation, model: str,
                          tmp_file: tempfile.NamedTemporaryFile, image_tmp_file: tempfile.NamedTemporaryFile,
                          context_len=4096, temperature=0.0, noformat=False, vision=False) -> SummaryText:
     job_type = job['job_type']
@@ -774,8 +779,10 @@ async def summarize_file(client: AsyncClient, job: FileInformation, model: str,
             prompt=command_prompt,
             system=system_prompt,
             format=format,
-            images=images,
-            options={"temperature": temperature, "num_ctx": context_len, "num_predict": CONST_SUMMARY_NUM_PREDICT}
+            max_len=CONST_SUMMARY_NUM_PREDICT,
+            temperature=temperature,
+            # images=images,
+            # options={"temperature": temperature, "num_ctx": context_len, "num_predict": CONST_SUMMARY_NUM_PREDICT}
         )
     elif job_type == CONST_JOB_SUMMARY_IMAGE and image_tmp_file:
         system_prompt, command_prompt = await format_image_prompt(language)
@@ -785,16 +792,18 @@ async def summarize_file(client: AsyncClient, job: FileInformation, model: str,
             prompt=command_prompt,
             system=system_prompt,
             format=format,
-            options={"temperature": temperature, "num_ctx": context_len, "num_predict": CONST_SUMMARY_NUM_PREDICT},
+            max_len=CONST_SUMMARY_NUM_PREDICT,
+            temperature=temperature,
             images=[image_content]
+            # options={"temperature": temperature, "num_ctx": context_len, "num_predict": CONST_SUMMARY_NUM_PREDICT},
         )
     else:
         raise ValueError(f"Unsupported job type: {job_type}")
 
     if noformat:
-        summary = SummaryText(summary=response.response, tags=None)
+        summary = SummaryText(summary=response.message['content'], tags=None)
     else:
-        summary = SummaryText.model_validate_json(response.response)
+        summary = SummaryText.model_validate_json(response.message['content'])
 
     return summary
 

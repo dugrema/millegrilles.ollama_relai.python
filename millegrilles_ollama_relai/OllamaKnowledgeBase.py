@@ -11,6 +11,7 @@ from typing import AsyncGenerator, Any, Union, Optional
 from bs4 import BeautifulSoup
 from ollama import GenerateResponse, AsyncClient
 
+from millegrilles_ollama_relai.InstancesDao import InstanceDao, MessageWrapper
 from millegrilles_ollama_relai.OllamaContext import OllamaContext
 from millegrilles_ollama_relai.OllamaInstanceManager import OllamaInstance
 from millegrilles_ollama_relai.Structs import SummaryKeywords, LinkIdPicker, KnowledgeBaseSearchResponse, \
@@ -26,7 +27,7 @@ CONST_KIWIX_WIKIPEDIA_EN_SEARCH_LABEL = 'kiwixWikipediaEnSearch'
 
 class KnowledgBaseHandler:
 
-    def __init__(self, context: OllamaContext, client: AsyncClient):
+    def __init__(self, context: OllamaContext, client: InstanceDao):
         self.__logger = logging.getLogger(__name__ + '.' + self.__class__.__name__)
         self.__context = context
         self.__client = client
@@ -49,9 +50,10 @@ class KnowledgBaseHandler:
             prompt=query,
             think=None,
             format=SummaryKeywords.model_json_schema(),
-            options={"num_predict": self.__num_predict_summary, "temperature": 0.01},
+            max_len=self.__num_predict_summary,
+            temperature=0.1,
         )
-        response = SummaryKeywords.model_validate_json(output.response)
+        response = SummaryKeywords.model_validate_json(output.message['content'])
         return response
 
     async def search_query(self, topic: str, query: str, search_results: list[dict]):
@@ -75,11 +77,12 @@ class KnowledgBaseHandler:
             prompt=prompt,
             think=None,
             format=LinkIdPicker.model_json_schema(),
-            options={"num_predict": self.__num_predict_summary, "temperature": 0.01},
+            max_len=self.__num_predict_summary,
+            temperature=0.1,
         )
 
         # Fetch the selected link by linkId
-        response_dict = LinkIdPicker.model_validate_json(output.response)
+        response_dict = LinkIdPicker.model_validate_json(output.message['content'])
         link_ids = response_dict.link_ids
         chosen_links = [l for l in search_results if l['linkId'] in link_ids]
         self.__logger.debug("Chosen links: %s", json.dumps(chosen_links, indent=2))
@@ -132,10 +135,11 @@ class KnowledgBaseHandler:
                 prompt=prompt,
                 think=None,
                 format=MatchResult.model_json_schema(),
-                options={"num_predict": self.__num_predict_summary, "temperature": 0.01},
+                max_len=self.__num_predict_summary,
+                temperature=0.1,
             )
 
-            result_value = MatchResult.model_validate_json(output.response)
+            result_value = MatchResult.model_validate_json(output.message['content'])
             if result_value.match:
                 article['content'] = article_truncated
                 article['url'] = url
@@ -212,10 +216,8 @@ class KnowledgBaseHandler:
             think=None,
             prompt=prompt,
             stream=True,
-            options={
-                "num_predict": self.__num_predict_response,
-                "temperature": 0.1,
-            },
+            max_len=self.__num_predict_response,
+            temperature=0.1,
         )
 
         async for value in stream:
@@ -259,10 +261,8 @@ class KnowledgBaseHandler:
             think=None,
             prompt=prompt,
             stream=True,
-            options={
-                "num_predict": self.__num_predict_response,
-                "temperature": 0.1,
-            },
+            max_len=self.__num_predict_response,
+            temperature=0.1,
         )
 
         async for value in stream:
@@ -325,9 +325,11 @@ class KnowledgBaseHandler:
             elif isinstance(chunk, KnowledgeBaseSearchResponse):
                 content = f'Reference: [{chunk.reference_title}]({chunk.reference_url})'
                 yield MardownTextResponse(text=content, complete_block=True)
-            elif isinstance(chunk, GenerateResponse):
-                # Final pass with fact checking stream
-                yield MardownTextResponse(text=chunk.response)
+            # elif isinstance(chunk, GenerateResponse):
+            #     # Final pass with fact checking stream
+            #     yield MardownTextResponse(text=chunk.response)
+            elif isinstance(chunk, MessageWrapper):
+                yield MardownTextResponse(text=chunk.message['content'])
             elif isinstance(chunk, MardownTextResponse):  # Passthrough for formatting
                 yield chunk
             else:

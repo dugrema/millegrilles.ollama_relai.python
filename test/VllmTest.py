@@ -214,14 +214,21 @@ async def chat_large_prompt(client: AsyncOpenAI):
             error_content = bre.response.json()
             print(error_content)
 
+
+async def get_models(client: AsyncOpenAI):
+    models = await client.models.list()
+    print(f"Models\n{models}")
+
+
 async def main():
     client = get_client()
+    await get_models(client)
     # await completions_1(client)
     # await chat_1(client)
     # await chat_2(client)
     # await chat_image(client)
     # await chat_formatted_1(client)
-    await chat_large_prompt(client)
+    # await chat_large_prompt(client)
 
 
 if __name__ == '__main__':

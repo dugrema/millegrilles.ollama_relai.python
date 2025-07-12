@@ -3,64 +3,28 @@ import datetime
 
 import httpx
 import logging
-import re
 
 import redis.asyncio as redis
 from redis.exceptions import ConnectionError as RedisConnectionError
-from ollama import AsyncClient, ProcessResponse, ListResponse, ShowResponse, ResponseError
+from ollama import AsyncClient as OllamaAsyncClient, ListResponse, ResponseError as OllamaResponseError
+from openai import AsyncClient as OpenaiAsyncClient, OpenAIError
 from typing import Optional, Any, Coroutine, Callable, Awaitable
 
 from millegrilles_messages.messages import Constantes
 from millegrilles_ollama_relai import Constantes as OllamaConstants
 from millegrilles_messages.bus.PikaChannel import MilleGrillesPikaChannel
 from millegrilles_messages.bus.PikaQueue import MilleGrillesPikaQueueConsumer, RoutingKey
-from millegrilles_messages.messages.Hachage import hacher
 from millegrilles_messages.messages.MessagesModule import MessageWrapper
+from millegrilles_ollama_relai.InstancesDao import InstanceDao, OllamaModelParams, OpenAiInstanceDao, OllamaInstanceDao, \
+    ClientDaoError
 from millegrilles_ollama_relai.OllamaConfiguration import OllamaConfiguration
 from millegrilles_ollama_relai.OllamaContext import OllamaContext
+from millegrilles_ollama_relai.Util import model_name_to_id
 
 LOGGER = logging.getLogger(__name__)
 
 CONST_OLLAMA_LEASE_DURATION = 20
 CONST_OLLAMA_CHAT_LEASE_DURATION = 900  # Message duration in queue
-
-class OllamaModelParams:
-
-    def __init__(self, id: str, model: ListResponse.Model, show_response: ShowResponse):
-        self.id = id
-        self.model = model
-        self.show_response = show_response
-        self.__context_length = 4096
-
-        self.__load_parameters()
-
-    def __load_parameters(self):
-        # Note: Unless overridden by parameters, the ollama num_ctx defaults to 4096 regardless of model capacity
-        # info = self.show_response.modelinfo
-        # try:
-        #     architecture = info['general.architecture']
-        #     self.__context_length = info[f'{architecture}.context_length']
-        # except KeyError:
-        #     pass
-
-        # Overrides
-        try:
-            for param in self.show_response.parameters.splitlines():
-                group = re.search(r'(\w+)\s+(\S+)', param)
-                key = group[1]
-                value = group[2]
-                if key == 'num_ctx':
-                    self.__context_length = int(value)
-        except AttributeError:
-            pass  # No custom parameters
-
-    @property
-    def capabilities(self):
-        return self.show_response.capabilities
-
-    @property
-    def context_length(self):
-        return self.__context_length
 
 
 class OllamaInstance:
@@ -79,12 +43,13 @@ class OllamaInstance:
         self.__channel: Optional[MilleGrillesPikaChannel] = None
         self.__consumer: Optional[MilleGrillesPikaQueueConsumer] = None
 
-        self.__ollama_status_response: Optional[ProcessResponse] = None
+        self.__ollama_status_active = False
         self.__model_list_response: Optional[ListResponse] = None
         self.__ollama_model_by_id: dict[str, OllamaModelParams] = dict()
 
         self.__ready = False  # Ready is True when at least 1 model is online
         self.semaphore = asyncio.BoundedSemaphore(1)
+        self.__connection_dao: Optional[InstanceDao] = None
 
     def ready(self) -> bool:
         return self.__ready
@@ -92,8 +57,39 @@ class OllamaInstance:
     def stop(self):
         asyncio.get_event_loop().call_soon(self.__stop_event.set)
 
+    async def __detect_instance_type(self):
+        url = self.url
+
+        while self.__context.stopping is False:
+            try:
+                client = OpenaiAsyncClient(api_key="DUMMY", base_url=url)
+                try:
+                    await client.models.list()
+                    self.__logger.info(f"Connected to OpenAI at {url}")
+                    # This is an openai instance
+                    self.__connection_dao = OpenAiInstanceDao(self.__context.configuration, url)
+                    return
+                except OpenAIError:
+                    pass  # Not OpenAI
+
+                client = OllamaAsyncClient(host=url)
+                try:
+                    await client.ps()
+                    # No error, this is an ollama instance
+                    self.__logger.info(f"Connected to Ollama at {url}")
+                    self.__connection_dao = OllamaInstanceDao(self.__context.configuration, url)
+                    return
+                except OllamaResponseError:
+                    pass  # Not ollama
+            except (httpx.ConnectError, ConnectionError):
+                self.__logger.warning(f"Unable to connect to {url}, will retry")
+            await self.__context.wait(10)
+
     async def run(self):
         self.__logger.info(f"Starting ollama instance thread for {self.url}")
+
+        # Detect type of connection (Ollama, OpenAI)
+        await self.__detect_instance_type()
 
         # Create channel with queue consumer
         await self.__create_channel()
@@ -102,15 +98,7 @@ class OllamaInstance:
             group.create_task(self.__refresh_thread())
             group.create_task(self.__lease_thread())
 
-        # while not self.__stop_event.is_set():
-        #     await self.__maintain()
-        #     try:
-        #         await asyncio.wait_for(self.__stop_event.wait(), 20)
-        #         break  # Stopping
-        #     except asyncio.TimeoutError:
-        #         pass
-
-        self.__logger.info(f"Stopping ollama instance thread for {self.url}")
+        self.__logger.info(f"Stopping instance thread for {self.url}")
 
         # Close consumer and channel
         self.__consumer = None
@@ -156,49 +144,23 @@ class OllamaInstance:
 
     async def __fetch_status(self):
         self.__logger.debug(f"Checking with {self.url}")
-        client = self.get_async_client(self.__context.configuration)
+        current_status = self.__ollama_status_active
         try:
-            # Test connection by getting currently loaded model information
-            self.__ollama_status_response = await client.ps()
-            self.__model_list_response = await client.list()
+            self.__ollama_status_active = await self.__connection_dao.status()
+            send_update_event = current_status != self.__ollama_status_active
 
-            current_model_ids = set(self.__ollama_model_by_id.keys())
+            model_update = await self.__connection_dao.models()
+            self.__ollama_model_by_id = model_update['models']
 
-            send_update_event = False
-            for model in self.__model_list_response.models:
-                model_id = model_name_to_id(model.model)
-                update = False
-                try:
-                    existing_model = self.__ollama_model_by_id[model_id]
-                    if existing_model.model.modified_at < model.modified_at:
-                        # Model has been updated
-                        update = True
-                except KeyError:
-                    update = True
-                else:
-                    current_model_ids.remove(model_id)  # Model still used
+            if len(model_update['added']) > 0 or len(model_update['removed']) > 0:
+                send_update_event = True
 
-                if update:
-                    # Add model to list
-                    show_model = await client.show(model.model)
-                    model_params = OllamaModelParams(model_id, model, show_model)
-                    self.__ollama_model_by_id[model_id] = model_params
-
-                    send_update_event = True  # Model added/updated
-
-            # Remove models that are no longer present
-            for model_id in current_model_ids:
-                send_update_event = True  # Model removed
-                del self.__ollama_model_by_id[model_id]
-
-            # Status ready is True if at least 1 model is available
+            current_ready = self.__ready
             self.__ready = len(self.__ollama_model_by_id) > 0
+            if current_ready != self.__ready:
+                send_update_event = True
 
-            if send_update_event:
-                await self.send_model_update_event()
-
-            self.__logger.debug(f"Connection OK: {self.url}")
-        except (ConnectionError, httpx.ConnectError, ResponseError) as e:
+        except (ConnectionError, httpx.ConnectError, ClientDaoError) as e:
             # Failed to connect
             if self.__logger.isEnabledFor(logging.DEBUG):
                 self.__logger.exception(f"Connection error on {self.url}")
@@ -207,9 +169,69 @@ class OllamaInstance:
 
             # Reset status, avoids picking this instance up
             self.__ready = False
-            self.__ollama_status_response = None
+            self.__ollama_status_active = False
+            send_update_event = current_status is not False
             self.__model_list_response = None
             self.__ollama_model_by_id.clear()
+
+        if send_update_event:
+            await self.send_model_update_event()
+
+
+    # client = self.get_async_client(self.__context.configuration)
+        # try:
+        #     # Test connection by getting currently loaded model information
+        #     self.__ollama_status_response = await client.ps()
+        #     self.__model_list_response = await client.list()
+        #
+        #     current_model_ids = set(self.__ollama_model_by_id.keys())
+        #
+        #     send_update_event = False
+        #     for model in self.__model_list_response.models:
+        #         model_id = model_name_to_id(model.model)
+        #         update = False
+        #         try:
+        #             existing_model = self.__ollama_model_by_id[model_id]
+        #             if existing_model.model.modified_at < model.modified_at:
+        #                 # Model has been updated
+        #                 update = True
+        #         except KeyError:
+        #             update = True
+        #         else:
+        #             current_model_ids.remove(model_id)  # Model still used
+        #
+        #         if update:
+        #             # Add model to list
+        #             show_model = await client.show(model.model)
+        #             model_params = OllamaModelParams(model_id, model, show_model)
+        #             self.__ollama_model_by_id[model_id] = model_params
+        #
+        #             send_update_event = True  # Model added/updated
+        #
+        #     # Remove models that are no longer present
+        #     for model_id in current_model_ids:
+        #         send_update_event = True  # Model removed
+        #         del self.__ollama_model_by_id[model_id]
+        #
+        #     # Status ready is True if at least 1 model is available
+        #     self.__ready = len(self.__ollama_model_by_id) > 0
+        #
+        #     if send_update_event:
+        #         await self.send_model_update_event()
+        #
+        #     self.__logger.debug(f"Connection OK: {self.url}")
+        # except (ConnectionError, httpx.ConnectError, ResponseError) as e:
+        #     # Failed to connect
+        #     if self.__logger.isEnabledFor(logging.DEBUG):
+        #         self.__logger.exception(f"Connection error on {self.url}")
+        #     else:
+        #         self.__logger.info(f"Connection error on {self.url}: %s" % str(e))
+        #
+        #     # Reset status, avoids picking this instance up
+        #     self.__ready = False
+        #     self.__ollama_status_response = None
+        #     self.__model_list_response = None
+        #     self.__ollama_model_by_id.clear()
 
     async def __maintain_model_keys(self):
         try:
@@ -246,9 +268,13 @@ class OllamaInstance:
             params = {'host':connection_url}
         return params
 
-    def get_async_client(self, configuration: OllamaConfiguration, timeout=None) -> AsyncClient:
+    def get_async_client(self, configuration: OllamaConfiguration, timeout=None) -> OllamaAsyncClient:
         options = self.get_client_options(configuration)
-        return AsyncClient(timeout=timeout, **options)
+        return OllamaAsyncClient(timeout=timeout, **options)
+
+    @property
+    def connection(self) -> Optional[InstanceDao]:
+        return self.__connection_dao
 
     @property
     def models(self) -> list[OllamaModelParams]:
@@ -582,11 +608,3 @@ async def create_instance_channel(context: OllamaContext,
     await q_channel.add_queue_consume(q_instance)
 
     return q_channel, q_instance
-
-
-def model_name_to_id(name: str) -> str:
-    """
-    :param name: Model name
-    :return: A 16 char model id
-    """
-    return hacher(name.lower(), hashing_code='blake2s-256')[-16:]
