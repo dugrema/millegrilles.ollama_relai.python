@@ -10,6 +10,7 @@ from asyncio import TaskGroup
 from typing import Optional, TypedDict
 
 import nacl.exceptions
+import openai
 import tiktoken
 from pydantic import Field, ValidationError
 
@@ -46,7 +47,7 @@ CONST_JOB_RAG = 'rag'
 CONST_JOB_SUMMARY_TEXT = 'summaryText'
 CONST_JOB_SUMMARY_IMAGE = 'summaryImage'
 CONST_CHAR_MULTIPLIER = 4.5
-CONST_SUMMARY_NUM_PREDICT = 2048
+CONST_SUMMARY_NUM_PREDICT = 1024
 
 
 class FileInformation(TypedDict):
@@ -443,7 +444,7 @@ class DocumentIndexHandler:
                     self.__logger.exception(f"Error processing file tuuid:{tuuid}/fuuid:{fuuid}, will retry")
                     continue
                 finally:
-                    self.__logger.debug("Closing tmp file")
+                    self.__logger.debug("Closing tmp file for tuuid:%s/fuuid%s", tuuid, fuuid)
                     if tmp_file:
                         tmp_file.close()
                     if image_tmp_file:
@@ -761,32 +762,52 @@ async def summarize_file(client: InstanceDao, job: FileInformation, model: str,
     else:
         format = SummaryText
 
+    token_padding = 768
+
     if job_type == CONST_JOB_SUMMARY_TEXT and tmp_file:
         tmp_file.seek(0)
         effective_context = context_len
-        if vision and image_tmp_file:
-            # Also add image, can help with PDFs that have no text content
-            image_tmp_file.seek(0)
-            image_content = await asyncio.to_thread(image_tmp_file.read)
-            image_tmp_file.seek(0)
-            images = [image_content]
-            effective_context -= 512  # Give enough space for the image
+        # if vision and image_tmp_file:
+        #     # Also add image, can help with PDFs that have no text content
+        #     image_tmp_file.seek(0)
+        #     image_content = await asyncio.to_thread(image_tmp_file.read)
+        #     image_tmp_file.seek(0)
+        #     images = [image_content]
+        #     effective_context -= 512  # Give enough space for the image
+        # else:
+        #     images = None
+
+        for i in range(0, 3):
+            tmp_file.seek(0)
+            system_prompt, command_prompt = await format_text_prompt(
+                language, effective_context, CONST_SUMMARY_NUM_PREDICT, job['mimetype'], tmp_file, token_padding=token_padding)
+
+            try:
+                response = await client.generate(
+                    model=model,
+                    prompt=command_prompt,
+                    system=system_prompt,
+                    response_format=format,
+                    max_len=CONST_SUMMARY_NUM_PREDICT,
+                    temperature=temperature,
+                    # images=images,
+                    # options={"temperature": temperature, "num_ctx": context_len, "num_predict": CONST_SUMMARY_NUM_PREDICT}
+                )
+                break
+            except openai.BadRequestError as bre:
+                LOGGER.warning("Error summarizing file tuuid:%s/fuuid:%s padding %s: %s", job.get('tuuid'), job.get('fuuid'), token_padding, bre)
+                # Likely that context was exceeded, retry
+                token_padding *= 2  # Double the padding
         else:
-            images = None
+            raise ValueError(f"Unable to summarize file: tuuid:{job.get('tuuid')}/fuuid:{job.get('fuuid')}")
 
-        system_prompt, command_prompt = await format_text_prompt(language, effective_context, job['mimetype'], tmp_file)
+    elif job_type == CONST_JOB_SUMMARY_IMAGE:
+        if not image_tmp_file:
+            image_tmp_file = tmp_file
+        if not image_tmp_file:
+            ValueError('No image to review')
 
-        response = await client.generate(
-            model=model,
-            prompt=command_prompt,
-            system=system_prompt,
-            response_format=format,
-            max_len=CONST_SUMMARY_NUM_PREDICT,
-            temperature=temperature,
-            # images=images,
-            # options={"temperature": temperature, "num_ctx": context_len, "num_predict": CONST_SUMMARY_NUM_PREDICT}
-        )
-    elif job_type == CONST_JOB_SUMMARY_IMAGE and image_tmp_file:
+        image_tmp_file.seek(0)
         system_prompt, command_prompt = await format_image_prompt(language)
         image_content = await asyncio.to_thread(image_tmp_file.read)
         response = await client.generate(
@@ -903,7 +924,7 @@ async def format_image_prompt(language: str):
     return system_prompt, command_prompt
 
 
-async def format_text_prompt(language: str, context_len: int, mimetype: str, tmp_file: tempfile.NamedTemporaryFile) -> (str, str):
+async def format_text_prompt(language: str, context_len: int, completion_len: int, mimetype: str, tmp_file: tempfile.NamedTemporaryFile, token_padding=1024) -> (str, str):
     encoding = tiktoken.encoding_for_model("text-embedding-3-small")
 
     char_multiplier = CONST_CHAR_MULTIPLIER
@@ -933,21 +954,22 @@ async def format_text_prompt(language: str, context_len: int, mimetype: str, tmp
     command_prompt = f"<Document>\n{content}\n</Document>"
 
     # Trim content
-    for i in range(0, 10):
-        content_len = len(encoding.encode(system_prompt + command_prompt))
-        if content_len > context_len:
-            char_multiplier -= 0.25
-            context_chars = math.floor(char_multiplier * context_len)
-            try:
-                content = content[0:context_chars]
-                LOGGER.info(f"Truncated document to {context_chars}. Initial len:{len(system_prompt + command_prompt)}")
-                # Prepare a new prompt with truncated output
-                command_prompt = f"<Document>\n{content}\n</Document>"
-            except IndexError:
-                LOGGER.debug(f"Document not truncated, len: {content_len}/{context_len}")
-        else:
-            LOGGER.debug(f"Document not truncated, {content_len}/{context_len} tokens ({len(system_prompt + command_prompt)} chars)")
-            break
+    system_prompt_len = len(encoding.encode(system_prompt))
+    free_space = context_len - system_prompt_len - completion_len - token_padding
+    encoded_content = encoding.encode(content)
+    if len(encoded_content) > free_space:
+        try:
+            # Truncate tokens,
+            encoded_content = encoded_content[0:free_space]
+            content = encoding.decode(encoded_content)
+            LOGGER.info(f"Truncated document to {free_space} tokens ({len(content)} chars). Initial len:{len(system_prompt + command_prompt)}")
+            # Prepare a new prompt with truncated output
+            command_prompt = f"<Document>\n{content}\n</Document>"
+        except IndexError:
+            LOGGER.debug(f"Document not truncated, len: {len(content)}/{context_len}")
+    else:
+        LOGGER.debug(f"Document not truncated, {len(encoded_content)+system_prompt_len}/{context_len} tokens ({len(system_prompt + command_prompt)} chars)")
+        # break
 
     tmp_file.seek(0)
 

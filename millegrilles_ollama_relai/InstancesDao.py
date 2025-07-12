@@ -1,14 +1,17 @@
 import logging
 import httpx
 import re
+import base64
 
 from typing import Any, TypedDict, Optional, AsyncIterator, Union
 
 from openai.types import Model as OpenaiModel
 from openai.types.chat import ChatCompletionSystemMessageParam, ChatCompletionUserMessageParam, \
-    ChatCompletionAssistantMessageParam, ChatCompletion, ChatCompletionChunk
+    ChatCompletionAssistantMessageParam, ChatCompletion, ChatCompletionChunk, ChatCompletionContentPartTextParam, \
+    ChatCompletionContentPartImageParam
 from openai.types.shared_params import ResponseFormatJSONSchema
 from openai.types.shared_params.response_format_json_schema import JSONSchema
+from openai.types.chat.chat_completion_content_part_image_param import ImageURL
 from pydantic import BaseModel
 
 from millegrilles_ollama_relai.OllamaConfiguration import OllamaConfiguration
@@ -456,7 +459,27 @@ class OpenAiInstanceDao(InstanceDao):
         if system:
             messages.append(ChatCompletionSystemMessageParam(content=system, role="system"))
         if prompt:
-            messages.append(ChatCompletionUserMessageParam(content=prompt, role="user"))
+            if images:
+                image = images[0]
+                if len(images) > 1:
+                    raise ValueError("Only 1 image supported")
+
+                if isinstance(image, str):
+                    b64_image = image
+                elif isinstance(image, bytes):
+                    b64_image = base64.b64encode(image).decode('utf-8')
+                else:
+                    raise ValueError('Image in wrong format')
+
+                messages.append(ChatCompletionUserMessageParam(role="user", content=[
+                    ChatCompletionContentPartTextParam(type="text", text=prompt),
+                    ChatCompletionContentPartImageParam(
+                        type="image_url",
+                        image_url=ImageURL(url=f"data:image/png;base64,{b64_image}", detail="high")
+                    )
+                ]))
+            else:
+                messages.append(ChatCompletionUserMessageParam(content=prompt, role="user"))
 
         return await self.chat(model, messages, stream, think, None, response_format, max_len, temperature)
 
