@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+from ssl import SSLContext
 
 import httpx
 import logging
@@ -62,22 +63,30 @@ class OllamaInstance:
 
         while self.__context.stopping is False:
             try:
-                client = OpenaiAsyncClient(api_key="DUMMY", base_url=url)
+                options = self.get_client_options(self.__context.configuration)
+                # Create custom httpx client to support system certs
+                if options.get('verify'):
+                    ssl_context = self.__context.ssl_context
+                else:
+                    ssl_context = None
+                httpx_client = httpx.AsyncClient(verify=ssl_context, cert=options.get('cert'))
+                client = OpenaiAsyncClient(http_client=httpx_client, base_url=url, api_key="DUMMY")
                 try:
                     await client.models.list()
                     self.__logger.info(f"Connected to OpenAI at {url}")
                     # This is an openai instance
-                    self.__connection_dao = OpenAiInstanceDao(self.__context.configuration, url)
+                    self.__connection_dao = OpenAiInstanceDao(self.__context, url)
                     return
-                except OpenAIError:
+                except OpenAIError as oae:
+                    self.__logger.debug("Error connecting to OpenAI server: %s", oae)
                     pass  # Not OpenAI
 
-                client = OllamaAsyncClient(host=url)
+                client = OllamaAsyncClient(host=url, **options)
                 try:
                     await client.ps()
                     # No error, this is an ollama instance
                     self.__logger.info(f"Connected to Ollama at {url}")
-                    self.__connection_dao = OllamaInstanceDao(self.__context.configuration, url)
+                    self.__connection_dao = OllamaInstanceDao(self.__context, url)
                     return
                 except OllamaResponseError:
                     pass  # Not ollama

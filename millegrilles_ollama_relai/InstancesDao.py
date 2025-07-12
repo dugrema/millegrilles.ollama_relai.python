@@ -20,6 +20,7 @@ from ollama import AsyncClient as OllamaAsyncClient, ResponseError as OllamaResp
     ChatResponse, GenerateResponse
 from openai import AsyncClient as OpenaiAsyncClient, APIConnectionError as OpenaiAPIConnectionError, OpenAIError
 
+from millegrilles_ollama_relai.OllamaContext import OllamaContext
 from millegrilles_ollama_relai.Util import model_name_to_id
 
 
@@ -176,8 +177,8 @@ class OpenaiModelParams(ModelParams):
 
 class InstanceDao:
 
-    def __init__(self, configuration: OllamaConfiguration, url: str):
-        self._configuration = configuration
+    def __init__(self, context: OllamaContext, url: str):
+        self._context = context
         self._url = url
 
         self._known_models: dict[str, Any] = dict()
@@ -201,7 +202,7 @@ class InstanceDao:
         raise NotImplementedError('must implement')
 
     def get_client_options(self) -> dict:
-        configuration = self._configuration
+        configuration = self._context.configuration
         connection_url = self._url
         if connection_url.lower().startswith('https://'):
             # Use a millegrille certificate authentication
@@ -214,9 +215,9 @@ class InstanceDao:
 
 class OllamaInstanceDao(InstanceDao):
 
-    def __init__(self, configuration: OllamaConfiguration, url: str):
+    def __init__(self, context: OllamaContext, url: str):
         self.__logger = logging.getLogger(__name__ + '.' + self.__class__.__name__)
-        super().__init__(configuration, url)
+        super().__init__(context, url)
 
     def get_async_client(self, timeout=None) -> OllamaAsyncClient:
         options = self.get_client_options()
@@ -345,13 +346,18 @@ class OllamaInstanceDao(InstanceDao):
 
 class OpenAiInstanceDao(InstanceDao):
 
-    def __init__(self, configuration: OllamaConfiguration, url: str):
+    def __init__(self, context: OllamaContext, url: str):
         self.__logger = logging.getLogger(__name__ + '.' + self.__class__.__name__)
-        super().__init__(configuration, url)
+        super().__init__(context, url)
 
     def get_async_client(self, timeout=None) -> OpenaiAsyncClient:
         options = self.get_client_options()
-        return OpenaiAsyncClient(api_key='DUMMY', base_url=self._url, timeout=timeout, **options)
+        if options.get('verify'):
+            ssl_context = self._context.ssl_context
+        else:
+            ssl_context = None
+        httpx_client = httpx.AsyncClient(verify=ssl_context, cert=options.get('cert'))
+        return OpenaiAsyncClient(http_client=httpx_client, base_url=self._url, api_key="DUMMY")
 
     async def status(self) -> bool:
         client = self.get_async_client(timeout=1)
