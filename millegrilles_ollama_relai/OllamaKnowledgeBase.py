@@ -41,7 +41,7 @@ class KnowledgBaseHandler:
 
     @property
     def _limit_article(self):
-        return int(2.8 * (self.__context_length - 1024))
+        return int(2.5 * (self.__context_length - 1024))
 
     async def parse_query(self, query: str) -> SummaryKeywords:
         output = await self.__client.generate(

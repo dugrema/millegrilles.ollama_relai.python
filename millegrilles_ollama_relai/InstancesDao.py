@@ -5,6 +5,7 @@ import base64
 
 from typing import Any, TypedDict, Optional, AsyncIterator, Union
 
+import openai
 from openai.types import Model as OpenaiModel
 from openai.types.chat import ChatCompletionSystemMessageParam, ChatCompletionUserMessageParam, \
     ChatCompletionAssistantMessageParam, ChatCompletion, ChatCompletionChunk, ChatCompletionContentPartTextParam, \
@@ -363,7 +364,7 @@ class OpenAiInstanceDao(InstanceDao):
         client = self.get_async_client(timeout=1)
         try:
             models = await client.models.list()
-        except OpenaiAPIConnectionError:
+        except (OpenaiAPIConnectionError, openai.InternalServerError):
             return False
         return models is not None
 

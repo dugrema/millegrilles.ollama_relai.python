@@ -81,7 +81,7 @@ class OllamaInstance:
                     self.__logger.debug("Error connecting to OpenAI server: %s", oae)
                     pass  # Not OpenAI
 
-                client = OllamaAsyncClient(host=url, **options)
+                client = OllamaAsyncClient(**options)
                 try:
                     await client.ps()
                     # No error, this is an ollama instance

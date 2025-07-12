@@ -1,0 +1,71 @@
+# HTTPS server for ollama on port 1445
+server {
+    listen 1445 ssl;
+    #listen 1445;
+    #listen [::]:1445 ssl ipv6only=on;
+    http2 on;
+
+    # Inclure les conf TLS
+    include /etc/nginx/conf.d/modules/*.conf.tls;
+
+    # Verifier qu'on a un certificat TLS client systeme valide
+    include /etc/nginx/conf.d/modules/webauth.location.tls;
+    include /etc/nginx/conf.d/auth_tlsclient.include;
+
+    location /api/embed {
+        set $upstream_ollama http://ollama:11434;
+        proxy_pass $upstream_ollama;
+        proxy_read_timeout 3m;
+
+        client_max_body_size 25m;
+
+        # Desactiver buffering de transfert
+        proxy_buffering off;  # Desactiver buffering de la reponse (download streaming)
+        proxy_request_buffering off;  # Desactiver buffering de la request (upload)
+    }
+
+    location /api/generate {
+        set $upstream_ollama http://ollama:11434;
+        proxy_pass $upstream_ollama;
+        proxy_read_timeout 10m;
+
+        client_max_body_size 25m;
+
+        # Desactiver buffering de transfert
+        proxy_buffering off;  # Desactiver buffering de la reponse (download streaming)
+        proxy_request_buffering off;  # Desactiver buffering de la request (upload)
+    }
+
+    location /api/chat {
+        set $upstream_ollama http://ollama:11434;
+        proxy_pass $upstream_ollama;
+        proxy_read_timeout 3m;
+
+        client_max_body_size 30m;
+
+        # Desactiver buffering de transfert
+        proxy_buffering off;  # Desactiver buffering de la reponse (download streaming)
+        proxy_request_buffering off;  # Desactiver buffering de la request (upload)
+    }
+
+    location /api {
+        set $upstream_ollama http://ollama:11434;
+        proxy_pass $upstream_ollama;
+        proxy_read_timeout 20s;
+
+        client_max_body_size 64k;
+    }
+
+    # VLLM
+    location /v1 {
+        set $upstream_vllm http://vllm:8000;
+        proxy_pass $upstream_vllm;
+        proxy_read_timeout 3m;
+
+        client_max_body_size 25m;
+
+        # Desactiver buffering de transfert
+        proxy_buffering off;  # Desactiver buffering de la reponse (download streaming)
+        proxy_request_buffering off;  # Desactiver buffering de la request (upload)
+    }
+}
