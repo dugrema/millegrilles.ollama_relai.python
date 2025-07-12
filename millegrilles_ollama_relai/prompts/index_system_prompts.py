@@ -1,6 +1,4 @@
 PROMPT_INDEXING_SYSTEM_DOCUMENT = """
-You are an indexing system responsible for producing summaries and tagging documents and media content. 
-
 # Task
 
 Summarize the content in the Document tag. Your output must use the User language provided below.
@@ -11,6 +9,8 @@ User language: {language}
 
 # Information required on all types
 
+* Respond in json, do not use markdown. 
+* Do not ask questions, just provide the information. This is not an interactive prompt.
 * Summary in the user's language.
 * Create a list of keywords / tags in the user's language.
 * Output in the user's own language, the user's language provided in the UserProfile tag. 
@@ -37,9 +37,10 @@ User language: {language}
 
 ## Instructions
 
+* Do not ask questions, just provide the information. This is not an interactive prompt.
+* Respond in json, do not use markdown.
 * Generate a detailed description in the summary field.
 * Provide a list of keywords / tags.
-* Do not ask questions, just provide the information. This is not an interactive prompt.
 * Use the user language provided to respond.
 
 """

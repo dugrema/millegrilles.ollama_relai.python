@@ -4,12 +4,18 @@ import re
 
 from typing import Any, TypedDict, Optional, AsyncIterator, Union
 
+from openai.types import Model as OpenaiModel
+from openai.types.chat import ChatCompletionSystemMessageParam, ChatCompletionUserMessageParam, \
+    ChatCompletionAssistantMessageParam, ChatCompletion, ChatCompletionChunk
+from openai.types.shared_params import ResponseFormatJSONSchema
+from openai.types.shared_params.response_format_json_schema import JSONSchema
+from pydantic import BaseModel
+
 from millegrilles_ollama_relai.OllamaConfiguration import OllamaConfiguration
-from millegrilles_ollama_relai.OllamaContext import OllamaContext
 
 from ollama import AsyncClient as OllamaAsyncClient, ResponseError as OllamaResponseError, ListResponse, ShowResponse, \
     ChatResponse, GenerateResponse
-from openai import AsyncClient as OpenaiAsyncClient, APIConnectionError as OpenaiAPIConnectionError
+from openai import AsyncClient as OpenaiAsyncClient, APIConnectionError as OpenaiAPIConnectionError, OpenAIError
 
 from millegrilles_ollama_relai.Util import model_name_to_id
 
@@ -60,29 +66,61 @@ class OllamaGenerateResponseWrapper(MessageWrapper):
     def to_dict(self):
         return {'message': dict(self.message), 'done': self.done}
 
+class OpenaiChatResponseWrapper(MessageWrapper):
 
-class OllamaModelParams:
+    def __init__(self, value: ChatCompletion):
+        self.__value = value
+        choice = value.choices[0]
+        self.message = MessageContent(role='assistant', content=choice.message.content, thinking=None, tool_calls=None)
+        self.done = choice.finish_reason is not None
+
+    def to_dict(self):
+        return {'message': dict(self.message), 'done': self.done}
+
+class OpenaiChatCompletionStreamWrapper(MessageWrapper):
+
+    def __init__(self, value: ChatCompletionChunk):
+        self.__value = value
+        choice = value.choices[0]
+        self.message = MessageContent(role='assistant', content=choice.delta.content, thinking=None, tool_calls=None)
+        self.done = choice.finish_reason is not None
+
+    def to_dict(self):
+        return {'message': dict(self.message), 'done': self.done}
+
+
+class ModelParams:
+
+    def __init__(self, id: str):
+        self.id = id
+
+    @property
+    def name(self) -> str:
+        raise NotImplementedError('must implement')
+
+    @property
+    def capabilities(self):
+        raise NotImplementedError('must implement')
+
+    @property
+    def context_length(self):
+        raise NotImplementedError('must implement')
+
+
+class OllamaModelParams(ModelParams):
 
     def __init__(self, id: str, model: ListResponse.Model, show_response: ShowResponse):
-        self.id = id
-        self.model = model
-        self.show_response = show_response
+        super().__init__(id)
+        self.__model = model
+        self.__show_response = show_response
         self.__context_length = 4096
 
         self.__load_parameters()
 
     def __load_parameters(self):
-        # Note: Unless overridden by parameters, the ollama num_ctx defaults to 4096 regardless of model capacity
-        # info = self.show_response.modelinfo
-        # try:
-        #     architecture = info['general.architecture']
-        #     self.__context_length = info[f'{architecture}.context_length']
-        # except KeyError:
-        #     pass
-
         # Overrides
         try:
-            for param in self.show_response.parameters.splitlines():
+            for param in self.__show_response.parameters.splitlines():
                 group = re.search(r'(\w+)\s+(\S+)', param)
                 key = group[1]
                 value = group[2]
@@ -92,13 +130,45 @@ class OllamaModelParams:
             pass  # No custom parameters
 
     @property
+    def name(self):
+        return self.__model.model
+
+    @property
     def capabilities(self):
-        return self.show_response.capabilities
+        return self.__show_response.capabilities
 
     @property
     def context_length(self):
         return self.__context_length
 
+
+class OpenaiModelParams(ModelParams):
+
+    def __init__(self, id: str, model: OpenaiModel):
+        super().__init__(id)
+        self.__model = model
+        self.__context_length = 4096
+        self.__capabilities = ['completion', 'vision']
+        self.__load_parameters()
+
+    def __load_parameters(self):
+        # Overrides
+        try:
+            self.__context_length = self.__model.model_extra['max_model_len']
+        except AttributeError:
+            pass  # No custom parameters
+
+    @property
+    def name(self):
+        return self.__model.id
+
+    @property
+    def capabilities(self):
+        return self.__capabilities
+
+    @property
+    def context_length(self):
+        return self.__context_length
 
 
 class InstanceDao:
@@ -119,11 +189,11 @@ class InstanceDao:
         raise NotImplementedError('must implement')
 
     async def chat(self, model: str, messages: Optional[list] = None, stream=False, think=False,
-                   tools: Optional[list] = None, format: Optional[dict] = None, max_len: Optional[int] = None, temperature=0.1):
+                   tools: Optional[list] = None, response_format: Optional[BaseModel] = None, max_len: Optional[int] = None, temperature=0.1):
         raise NotImplementedError('must implement')
 
     async def generate(self, model: str, prompt: str, system: Optional[str] = None, images: Optional[list[Union[str, bytes]]] = None,
-                       stream=False, think: Optional[bool] = None, format: Optional[dict] = None, max_len: Optional[int] = None,
+                       stream=False, think: Optional[bool] = None, response_format: Optional[BaseModel] = None, max_len: Optional[int] = None,
                        temperature=0.1) -> Union[MessageWrapper, AsyncIterator[OllamaChatResponseWrapper]]:
         raise NotImplementedError('must implement')
 
@@ -168,7 +238,10 @@ class OllamaInstanceDao(InstanceDao):
 
     async def models(self):
         client = self.get_async_client(timeout=3)
-        models_response = await client.list()
+        try:
+            models_response = await client.list()
+        except (ConnectionError, httpx.ConnectError, OllamaResponseError) as e:
+            raise ClientDaoError(e)
         known_models = self._known_models.copy()
         updated_models = dict()
 
@@ -180,7 +253,10 @@ class OllamaInstanceDao(InstanceDao):
                 del known_models[model_id]
             except KeyError:
                 # New model, fetch information
-                show_model = await client.show(model.model)
+                try:
+                    show_model = await client.show(model.model)
+                except (ConnectionError, httpx.ConnectError, OllamaResponseError) as e:
+                    raise ClientDaoError(e)
                 model_params = OllamaModelParams(model_id, model, show_model)
                 updated_models[model_id] = model_params
                 added_models.append(model_id)
@@ -194,7 +270,7 @@ class OllamaInstanceDao(InstanceDao):
         return ModelsUpdate(models=updated_models, added=added_models, removed=removed_models)
 
     async def chat(self, model: str, messages: Optional[list] = None, stream=False, think=False,
-                   tools: Optional[list] = None, format: Optional[dict] = None, max_len: Optional[int] = None,
+                   tools: Optional[list] = None, response_format: Optional[BaseModel] = None, max_len: Optional[int] = None,
                    temperature=0.1) -> Union[MessageWrapper, AsyncIterator[OllamaChatResponseWrapper]]:
 
         options = dict()
@@ -205,23 +281,26 @@ class OllamaInstanceDao(InstanceDao):
         if len(options) == 0:
             options = None
 
-        response = await self.get_async_client().chat(
-            model=model,
-            messages=messages,
-            tools=tools,
-            stream=True,
-            think=think,
-            options=options,
-        )
+        try:
+            response = await self.get_async_client().chat(
+                model=model,
+                messages=messages,
+                tools=tools,
+                stream=True,
+                think=think,
+                options=options,
+            )
 
-        if isinstance(response, AsyncIterator):
-            return self.__wrap_stream(response)
+            if isinstance(response, AsyncIterator):
+                return self.__wrap_stream(response)
 
-        wrapper = OllamaChatResponseWrapper(response)
-        return wrapper
+            wrapper = OllamaChatResponseWrapper(response)
+            return wrapper
+        except (ConnectionError, httpx.ConnectError, OllamaResponseError) as e:
+            raise ClientDaoError(e)
 
     async def generate(self, model: str, prompt: str, system: Optional[str] = None, images: Optional[list[Union[str, bytes]]] = None,
-                       stream=False, think: Optional[bool] = None, format: Optional[dict] = None, max_len: Optional[int] = None,
+                       stream=False, think: Optional[bool] = None, response_format: Optional[BaseModel] = None, max_len: Optional[int] = None,
                        temperature=0.1) -> Union[MessageWrapper, AsyncIterator[OllamaChatResponseWrapper]]:
 
         options = dict()
@@ -232,22 +311,25 @@ class OllamaInstanceDao(InstanceDao):
         if len(options) == 0:
             options = None
 
-        response = await self.get_async_client().generate(
-            model=model,
-            prompt=prompt,
-            system=system,
-            images=images,
-            stream=stream,
-            think=think,
-            format=format,
-            options=options,
-        )
+        try:
+            response = await self.get_async_client().generate(
+                model=model,
+                prompt=prompt,
+                system=system,
+                images=images,
+                stream=stream,
+                think=think,
+                format=response_format,
+                options=options,
+            )
 
-        if isinstance(response, AsyncIterator):
-            return self.__wrap_stream_generate(response)
+            if isinstance(response, AsyncIterator):
+                return self.__wrap_stream_generate(response)
 
-        wrapper = OllamaGenerateResponseWrapper(response)
-        return wrapper
+            wrapper = OllamaGenerateResponseWrapper(response)
+            return wrapper
+        except (ConnectionError, httpx.ConnectError, OllamaResponseError) as e:
+            raise ClientDaoError(e)
 
     async def __wrap_stream(self, response: AsyncIterator) -> AsyncIterator:
         async for chunk in response:
@@ -275,3 +357,109 @@ class OpenAiInstanceDao(InstanceDao):
         except OpenaiAPIConnectionError:
             return False
         return models is not None
+
+    async def models(self):
+        client = self.get_async_client(timeout=3)
+        try:
+            model_data, metadata = await client.models.list()
+            models = model_data[1]
+        except (ConnectionError, httpx.ConnectError, OpenAIError) as e:
+            raise ClientDaoError(e)
+
+        known_models = self._known_models.copy()
+        updated_models = dict()
+
+        added_models = list()
+        for model in models:
+            model_name = model.id
+            model_id = model_name_to_id(model_name)
+            try:
+                updated_models[model_id] = known_models[model_id]
+                del known_models[model_id]
+            except KeyError:
+                # New model, fetch information
+                model_params = OpenaiModelParams(model_id, model)
+                updated_models[model_id] = model_params
+                added_models.append(model_id)
+                pass
+
+        # Any remaining model has been removed from the list
+        removed_models = list(known_models.keys())
+
+        # Keep for reference
+        self._known_models = updated_models
+
+        return ModelsUpdate(models=updated_models, added=added_models, removed=removed_models)
+
+    def __map_messages(self, messages: list):
+        mapped_messages = list()
+        last_role = None
+        for message in messages:
+            role = message['role']
+            if role == 'system':
+                mapped_messages.append(ChatCompletionSystemMessageParam(content=message['content'], role="system"))
+            elif role == 'user':
+                if last_role == 'user':
+                    mapped_messages[-1]['content'] += '\n\n' + message['content']  # Concatenate to last message
+                else:
+                    mapped_messages.append(ChatCompletionUserMessageParam(content=message['content'], role="user"))
+            elif role == 'assistant':
+                if last_role == 'assistant':
+                    mapped_messages[-1]['content'] += '\n\n' + message['content']  # Concatenate to last message
+                else:
+                    mapped_messages.append(ChatCompletionAssistantMessageParam(content=message['content'], role="assistant"))
+            last_role = role
+
+        return mapped_messages
+
+    def __map_format(self, format_object: BaseModel) -> ResponseFormatJSONSchema:
+        json_schema_mapped = format_object.model_json_schema()
+        json_schema = JSONSchema(name='json_response', schema=json_schema_mapped)
+        return ResponseFormatJSONSchema(
+            json_schema=json_schema,
+            type="json_schema"
+        )
+
+    async def chat(self, model: str, messages: Optional[list] = None, stream=False, think=False,
+                   tools: Optional[list] = None, response_format: Optional[BaseModel] = None, max_len=1024, temperature=0.1):
+
+        if messages:
+            mapped_messages = self.__map_messages(messages)
+        else:
+            mapped_messages = None
+
+        if response_format:
+            mapped_format = self.__map_format(response_format)
+        else:
+            mapped_format = None
+
+        response = await self.get_async_client().chat.completions.create(
+            messages=mapped_messages,
+            model=model,
+            response_format=mapped_format,
+            max_tokens=max_len,
+            stream=stream,
+            # think=think,
+            temperature=temperature
+        )
+
+        if isinstance(response, AsyncIterator):
+            return self.__wrap_stream(response)
+
+        return OpenaiChatResponseWrapper(response)
+
+    async def generate(self, model: str, prompt: str, system: Optional[str] = None, images: Optional[list[Union[str, bytes]]] = None,
+                       stream=False, think: Optional[bool] = None, response_format: Optional[BaseModel] = None, max_len=1024,
+                       temperature=0.1) -> Union[MessageWrapper, AsyncIterator[OllamaChatResponseWrapper]]:
+
+        messages = list()
+        if system:
+            messages.append(ChatCompletionSystemMessageParam(content=system, role="system"))
+        if prompt:
+            messages.append(ChatCompletionUserMessageParam(content=prompt, role="user"))
+
+        return await self.chat(model, messages, stream, think, None, response_format, max_len, temperature)
+
+    async def __wrap_stream(self, response: AsyncIterator):
+        async for chunk in response:
+            yield OpenaiChatCompletionStreamWrapper(chunk)

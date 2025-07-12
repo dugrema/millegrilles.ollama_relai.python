@@ -48,8 +48,9 @@ async def chat_1(client: AsyncOpenAI):
         max_tokens=2048,
     )
     # content = response.model_dump_json()
-    content = response.choices[0]
-    print(f"Response: {content.message}")
+    choice = response.choices[0]
+    content = choice.message
+    print(f"Response: {content}")
 
 
 async def chat_2(client: AsyncOpenAI):
@@ -216,16 +217,19 @@ async def chat_large_prompt(client: AsyncOpenAI):
 
 
 async def get_models(client: AsyncOpenAI):
-    models = await client.models.list()
-    print(f"Models\n{models}")
+    model_data, metadata = await client.models.list()
+    models = model_data[1]
+    print("Models")
+    for model in models:
+        print(model)
 
 
 async def main():
     client = get_client()
-    await get_models(client)
+    # await get_models(client)
     # await completions_1(client)
     # await chat_1(client)
-    # await chat_2(client)
+    await chat_2(client)
     # await chat_image(client)
     # await chat_formatted_1(client)
     # await chat_large_prompt(client)

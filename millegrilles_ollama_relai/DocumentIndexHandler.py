@@ -32,7 +32,7 @@ from millegrilles_ollama_relai.InstancesDao import InstanceDao
 
 from millegrilles_ollama_relai.OllamaContext import OllamaContext
 from millegrilles_ollama_relai.OllamaInstanceManager import OllamaInstance, model_name_to_id, OllamaInstanceManager
-from millegrilles_ollama_relai.Util import decode_base64_nopad
+from millegrilles_ollama_relai.Util import decode_base64_nopad, cleanup_json_output
 from millegrilles_ollama_relai.Structs import SummaryText
 from millegrilles_ollama_relai.prompts.index_system_prompts import PROMPT_INDEXING_SYSTEM_IMAGES, \
     PROMPT_INDEXING_SYSTEM_DOCUMENT
@@ -232,7 +232,8 @@ class DocumentIndexHandler:
                             # Ensure that the summary model is available locally
                             model_configuration = self.__context.model_configuration
                             embedding_model = model_configuration['embedding_model_name']
-                            _instance = self.__ollama_instances.pick_instance_for_model(embedding_model)
+                            if embedding_model:
+                                _instance = self.__ollama_instances.pick_instance_for_model(embedding_model)
                             lease_actions.append(CONST_ACTION_SUMMARY)
                         except (TypeError, KeyError) as e:
                             self.__logger.debug(f"RAG configuration not initialized yet: {e}")
@@ -242,8 +243,9 @@ class DocumentIndexHandler:
                             # Ensure that the RAG model is available locally
                             model_configuration = self.__context.model_configuration
                             embedding_model = model_configuration['embedding_model_name']
-                            _instance = self.__ollama_instances.pick_instance_for_model(embedding_model)
-                            lease_actions.append(CONST_ACTION_RAG)
+                            if embedding_model:
+                                _instance = self.__ollama_instances.pick_instance_for_model(embedding_model)
+                                lease_actions.append(CONST_ACTION_RAG)
                         except (TypeError, KeyError) as e:
                             self.__logger.debug(f"RAG configuration not initialized yet: {e}")
 
@@ -502,9 +504,9 @@ class DocumentIndexHandler:
 
         job_type = job['job_type']
         if job_type in [CONST_JOB_RAG, CONST_JOB_SUMMARY_TEXT]:
-            model = model_configuration.get('summary_model_name') or llm_configuration['default_model']
+            model = model_configuration.get('summary_model_name') or llm_configuration['model_name']
         elif job_type == CONST_JOB_SUMMARY_IMAGE:
-            model = model_configuration.get('vision_model_name') or model_configuration.get('summary_model_name') or llm_configuration['default_model']
+            model = model_configuration.get('vision_model_name') or model_configuration.get('summary_model_name') or llm_configuration['model_name']
         else:
             raise ValueError(f'Unsupported job type: {job_type}')
 
@@ -757,7 +759,7 @@ async def summarize_file(client: InstanceDao, job: FileInformation, model: str,
     if noformat:
         format = None
     else:
-        format = SummaryText.model_json_schema()
+        format = SummaryText
 
     if job_type == CONST_JOB_SUMMARY_TEXT and tmp_file:
         tmp_file.seek(0)
@@ -778,7 +780,7 @@ async def summarize_file(client: InstanceDao, job: FileInformation, model: str,
             model=model,
             prompt=command_prompt,
             system=system_prompt,
-            format=format,
+            response_format=format,
             max_len=CONST_SUMMARY_NUM_PREDICT,
             temperature=temperature,
             # images=images,
@@ -791,7 +793,7 @@ async def summarize_file(client: InstanceDao, job: FileInformation, model: str,
             model=model,
             prompt=command_prompt,
             system=system_prompt,
-            format=format,
+            response_format=format,
             max_len=CONST_SUMMARY_NUM_PREDICT,
             temperature=temperature,
             images=[image_content]
@@ -803,7 +805,8 @@ async def summarize_file(client: InstanceDao, job: FileInformation, model: str,
     if noformat:
         summary = SummaryText(summary=response.message['content'], tags=None)
     else:
-        summary = SummaryText.model_validate_json(response.message['content'])
+        content = cleanup_json_output(response.message['content'])
+        summary = SummaryText.model_validate_json(content)
 
     return summary
 

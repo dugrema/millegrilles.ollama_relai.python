@@ -12,7 +12,7 @@ from millegrilles_ollama_relai.OllamaConfiguration import OllamaConfiguration
 LOGGER = logging.getLogger(__name__)
 
 class ChatConfiguration(TypedDict):
-    default_model: Optional[str]
+    model_name: Optional[str]
     chat_context_length: Optional[int]
 
 class ModelConfiguration(TypedDict):

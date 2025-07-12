@@ -16,7 +16,7 @@ from millegrilles_messages.bus.PikaChannel import MilleGrillesPikaChannel
 from millegrilles_messages.bus.PikaQueue import MilleGrillesPikaQueueConsumer, RoutingKey
 from millegrilles_messages.messages.MessagesModule import MessageWrapper
 from millegrilles_ollama_relai.InstancesDao import InstanceDao, OllamaModelParams, OpenAiInstanceDao, OllamaInstanceDao, \
-    ClientDaoError
+    ClientDaoError, ModelParams
 from millegrilles_ollama_relai.OllamaConfiguration import OllamaConfiguration
 from millegrilles_ollama_relai.OllamaContext import OllamaContext
 from millegrilles_ollama_relai.Util import model_name_to_id
@@ -81,9 +81,9 @@ class OllamaInstance:
                     return
                 except OllamaResponseError:
                     pass  # Not ollama
-            except (httpx.ConnectError, ConnectionError):
+            except (httpx.ConnectError, httpx.RemoteProtocolError, ConnectionError):
                 self.__logger.warning(f"Unable to connect to {url}, will retry")
-            await self.__context.wait(10)
+            await self.__context.wait(30)
 
     async def run(self):
         self.__logger.info(f"Starting ollama instance thread for {self.url}")
@@ -268,9 +268,9 @@ class OllamaInstance:
             params = {'host':connection_url}
         return params
 
-    def get_async_client(self, configuration: OllamaConfiguration, timeout=None) -> OllamaAsyncClient:
-        options = self.get_client_options(configuration)
-        return OllamaAsyncClient(timeout=timeout, **options)
+    # def get_async_client(self, configuration: OllamaConfiguration, timeout=None) -> OllamaAsyncClient:
+    #     options = self.get_client_options(configuration)
+    #     return OllamaAsyncClient(timeout=timeout, **options)
 
     @property
     def connection(self) -> Optional[InstanceDao]:
@@ -467,7 +467,7 @@ class OllamaInstanceManager:
             ready = False
 
             # Make a list of all available models
-            model_by_name_dict: dict[str, OllamaModelParams] = dict()
+            model_by_name_dict: dict[str, ModelParams] = dict()
             for instance in self.__instances:
                 # Toggle value for ready if at least one instance is ready
                 if instance.ready():
@@ -475,7 +475,7 @@ class OllamaInstanceManager:
 
                 models = instance.models
                 for model in models:
-                    model_by_name_dict[model.model.model] = model
+                    model_by_name_dict[model.name] = model
 
             if ready != self.__ollama_ready:
                 self.__ollama_ready = ready
@@ -495,7 +495,7 @@ class OllamaInstanceManager:
         models = list()
         for model in self.__model_by_name_dict.values():
             models.append({
-                'name': model.model.model,
+                'name': model.name,
                 'capabilities': model.capabilities,
                 'num_ctx': model.context_length,
             })

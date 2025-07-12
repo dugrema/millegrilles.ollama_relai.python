@@ -22,3 +22,8 @@ def model_name_to_id(name: str) -> str:
     :return: A 16 char model id
     """
     return hacher(name.lower(), hashing_code='blake2s-256')[-16:]
+
+def cleanup_json_output(content: str):
+    if content[0] == '`':
+        return content.replace('```json', '').replace('```', '').strip()
+    return content

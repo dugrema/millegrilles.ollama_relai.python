@@ -16,7 +16,7 @@ from millegrilles_ollama_relai.OllamaContext import OllamaContext
 from millegrilles_ollama_relai.OllamaInstanceManager import OllamaInstance
 from millegrilles_ollama_relai.Structs import SummaryKeywords, LinkIdPicker, KnowledgeBaseSearchResponse, \
     MardownTextResponse, MatchResult
-from millegrilles_ollama_relai.Util import check_token_len
+from millegrilles_ollama_relai.Util import check_token_len, cleanup_json_output
 from millegrilles_ollama_relai.prompts.knowledge_base_prompt import KNOWLEDGE_BASE_INITIAL_SUMMARY_PROMPT, \
     KNOWLEDGE_BASE_FIND_PAGE_PROMPT, KNOWLEDGE_BASE_SYSTEM_USE_ARTICLE_PROMPT, KNOWLEDGE_BASE_SUMMARY_ARTICLE_PROMPT, \
     KNOWLEDGE_BASE_CHECK_ARTICLE_PROMPT
@@ -33,7 +33,7 @@ class KnowledgBaseHandler:
         self.__client = client
         # self.__server_hostname = 'https://libs.millegrilles.com'
 
-        self.__model = context.model_configuration.get('knowledge_model_name') or context.chat_configuration['default_model']
+        self.__model = context.model_configuration.get('knowledge_model_name') or context.chat_configuration['model_name']
 
         self.__context_length = CONST_DEFAULT_CONTEXT_LENGTH
         self.__num_predict_summary = 768
@@ -49,11 +49,13 @@ class KnowledgBaseHandler:
             system=KNOWLEDGE_BASE_INITIAL_SUMMARY_PROMPT,
             prompt=query,
             think=None,
-            format=SummaryKeywords.model_json_schema(),
+            response_format=SummaryKeywords,
             max_len=self.__num_predict_summary,
             temperature=0.1,
         )
-        response = SummaryKeywords.model_validate_json(output.message['content'])
+        # content = content.replace('```json', '').replace('```', '').strip()
+        content = cleanup_json_output(output.message['content'])
+        response = SummaryKeywords.model_validate_json(content)
         return response
 
     async def search_query(self, topic: str, query: str, search_results: list[dict]):
@@ -76,13 +78,14 @@ class KnowledgBaseHandler:
             system=formatted_system_prompt,
             prompt=prompt,
             think=None,
-            format=LinkIdPicker.model_json_schema(),
+            response_format=LinkIdPicker,
             max_len=self.__num_predict_summary,
             temperature=0.1,
         )
 
         # Fetch the selected link by linkId
-        response_dict = LinkIdPicker.model_validate_json(output.message['content'])
+        content = cleanup_json_output(output.message['content'])
+        response_dict = LinkIdPicker.model_validate_json(content)
         link_ids = response_dict.link_ids
         chosen_links = [l for l in search_results if l['linkId'] in link_ids]
         self.__logger.debug("Chosen links: %s", json.dumps(chosen_links, indent=2))
@@ -134,12 +137,13 @@ class KnowledgBaseHandler:
                 system=system_prompt,
                 prompt=prompt,
                 think=None,
-                format=MatchResult.model_json_schema(),
+                response_format=MatchResult,
                 max_len=self.__num_predict_summary,
                 temperature=0.1,
             )
 
-            result_value = MatchResult.model_validate_json(output.message['content'])
+            content = cleanup_json_output(output.message['content'])
+            result_value = MatchResult.model_validate_json(content)
             if result_value.match:
                 article['content'] = article_truncated
                 article['url'] = url

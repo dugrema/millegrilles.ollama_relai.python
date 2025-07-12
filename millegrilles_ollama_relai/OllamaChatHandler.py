@@ -19,6 +19,7 @@ from millegrilles_messages.messages import Constantes as ConstantesMilleGrilles
 from millegrilles_messages.messages.EnveloppeCertificat import EnveloppeCertificat
 from millegrilles_messages.messages.MessagesModule import MessageWrapper
 from millegrilles_messages.Filehost import FilehostConnection
+from millegrilles_ollama_relai.Constantes import CHAT_TYPE_KNOWLEDGE, MODEL_TYPE_KNOWLEDGE
 from millegrilles_ollama_relai.InstancesDao import OllamaChatResponseWrapper
 from millegrilles_ollama_relai.OllamaContext import OllamaContext
 from millegrilles_messages.chiffrage.Mgs4 import chiffrer_mgs4_bytes_secrete
@@ -64,8 +65,14 @@ class OllamaChatHandler:
         self.__waiting_ids[chat_id] = {'reply_to': message.reply_to, 'correlation_id': message.correlation_id}
 
         # Re-emit the message on the model's process Q
-        model = message.parsed['model']
-        model_id = model_name_to_id(model)
+        chat_action = message.routage['action']
+        content = message.parsed
+        if chat_action == CHAT_TYPE_KNOWLEDGE:
+            chat_model = self.__context.model_configuration.get(MODEL_TYPE_KNOWLEDGE) or content['model']
+        else:
+            chat_model = content['model']
+        # chat_model = message.parsed['model']
+        model_id = model_name_to_id(chat_model)
 
         attachements = {'correlation_id': message.correlation_id, 'reply_to': message.reply_to}
         attachements.update(message.original['attachements'])
@@ -145,7 +152,10 @@ class OllamaChatHandler:
             content = message.parsed.copy()
             del content['__original']
 
-            chat_model = content['model']
+            if chat_action == CHAT_TYPE_KNOWLEDGE:
+                chat_model = self.__context.model_configuration.get(MODEL_TYPE_KNOWLEDGE) or content['model']
+            else:
+                chat_model = content['model']
             chat_role = content['role']
             new_conversation = content.get('new') or False
             conversation_id = content['conversation_id']
