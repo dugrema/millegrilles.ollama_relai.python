@@ -61,7 +61,7 @@ class OllamaInstance:
     async def __detect_instance_type(self):
         url = self.url
 
-        while self.__context.stopping is False:
+        while not self.__stop_event.is_set():
             try:
                 options = self.get_client_options(self.__context.configuration)
                 # Create custom httpx client to support system certs
@@ -92,7 +92,12 @@ class OllamaInstance:
                     pass  # Not ollama
             except (httpx.ConnectError, httpx.RemoteProtocolError, ConnectionError):
                 self.__logger.warning(f"Unable to connect to {url}, will retry")
-            await self.__context.wait(30)
+
+            try:
+                await asyncio.wait_for(self.__stop_event.wait(), 30)
+                return  # Stopping
+            except asyncio.TimeoutError:
+                pass  # Retry
 
     async def run(self):
         self.__logger.info(f"Starting ollama instance thread for {self.url}")
