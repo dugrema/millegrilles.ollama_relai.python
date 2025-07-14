@@ -3,6 +3,7 @@ import base64
 import json
 from typing import Optional
 
+
 import tiktoken
 
 import openai
@@ -19,12 +20,17 @@ from pydantic import BaseModel
 
 from millegrilles_ollama_relai.Util import check_token_len
 
-CONST_MODEL='google/gemma-3-4b-it-qat-q4_0-unquantized'
+# CONST_MODEL='google/gemma-3-4b-it-qat-q4_0-unquantized'
+# CONST_MODEL='/root/vllm/models/gemma-3-4b-it'
+CONST_MODEL='/root/vllm/models/gemma-3-4b-it-qat-q4_0-unquantized'
+# CONST_MODEL='/root/vllm/models/gemma-3n-E2B-it'
+# CONST_MODEL='/root/vllm/models/gemma-3n-E4B-it'
+# CONST_MODEL='/root/vllm/models/deepseek-r1-0528-qwen3-8B'
 
 
 def get_client() -> AsyncOpenAI:
     return AsyncOpenAI(base_url='http://bureau1.maple.maceroc.com:8001/v1', api_key='DUMMY')
-
+    # return AsyncOpenAI(base_url='http://vmhost4.maple.maceroc.com:8001/v1', api_key='DUMMY')
 
 async def completions_1(client: AsyncOpenAI):
     response = await client.completions.create(
@@ -60,7 +66,7 @@ async def chat_2(client: AsyncOpenAI):
             ChatCompletionUserMessageParam(content="What is the cause of the war in Syria?", role="user"),
         ],
         model=CONST_MODEL,
-        max_tokens=2048,
+        max_tokens=1024,
         stream=True
     )
     async for chunk in response:
@@ -139,10 +145,10 @@ class SummaryResponse(BaseModel):
 
 async def chat_large_prompt(client: AsyncOpenAI):
     pdf_files_path = [
+        '/home/mathieu/Downloads/Articles/Mai 2025/Aurores boréales au Québec _ quels secteurs pourraient être chanceux_ - MétéoMédia.pdf',
         '/home/mathieu/Downloads/Articles/Mai 2025/NIST.FIPS.186-5.pdf',
         '/home/mathieu/Downloads/Articles/Mai 2025/Journal of Nuclear Medicine - Issue 2024-08.pdf',
         '/home/mathieu/Downloads/Articles/Mai 2025/Apple Research 2025-06-09 - the-illusion-of-thinking.pdf',
-        '/home/mathieu/Downloads/Articles/Mai 2025/Aurores boréales au Québec _ quels secteurs pourraient être chanceux_ - MétéoMédia.pdf',
         '/home/mathieu/Downloads/Articles/Mai 2025/The Pulse #137_ Builder.ai did not “fake AI with 700 engineers”.pdf',
     ]
 
@@ -157,14 +163,16 @@ async def chat_large_prompt(client: AsyncOpenAI):
 
         encoding = tiktoken.encoding_for_model("text-embedding-3-small")
 
-        SYSTEM_PROMPT = "Summarize the file content from the content element. Provide the content language in ISO format, e.g. en, es, fr, jp."
+        SYSTEM_PROMPT = "Summarize the content element, use between 50 and 250 tokens. Provide the content language in ISO format, e.g. en, es, fr, jp."
         system_prompt_len = len(encoding.encode(SYSTEM_PROMPT))
 
-        CTX_LEN = 10240
+        # CTX_LEN = 10240
+        CTX_LEN = int(float(1024 * 30) * 0.89)
         RESPONSE_LEN = 1024
-        TEMPLATE_LEN = 955
+        # TEMPLATE_LEN = 955
+        # TEMPLATE_LEN = 3072
 
-        token_pdf = CTX_LEN - RESPONSE_LEN - TEMPLATE_LEN - system_prompt_len
+        token_pdf = CTX_LEN - RESPONSE_LEN - system_prompt_len
 
         encoded_content = encoding.encode(content)
         if len(encoded_content) > token_pdf:
@@ -190,7 +198,7 @@ async def chat_large_prompt(client: AsyncOpenAI):
                             #     type="image_url",
                             #     image_url=ImageURL(url=f"data:image/png;base64,{b64_image}", detail="high")
                             # ),
-                            ChatCompletionContentPartTextParam(type="text", text="<content>{content}</content>"),
+                            ChatCompletionContentPartTextParam(type="text", text=f"<content>{content}</content>"),
                         ]
                     ),
                 ],
@@ -199,7 +207,8 @@ async def chat_large_prompt(client: AsyncOpenAI):
                 response_format=ResponseFormatJSONSchema(
                     json_schema=json_schema,
                     type="json_schema"
-                )
+                ),
+                temperature=0.1
             )
             content = response.choices[0]
             print(f"{pdf_file_path} Response: {content.message}")
@@ -226,7 +235,7 @@ async def get_models(client: AsyncOpenAI):
 
 async def main():
     client = get_client()
-    # await get_models(client)
+    await get_models(client)
     # await completions_1(client)
     # await chat_1(client)
     await chat_2(client)
