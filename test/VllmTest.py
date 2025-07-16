@@ -22,7 +22,7 @@ from millegrilles_ollama_relai.Util import check_token_len
 
 # CONST_MODEL='google/gemma-3-4b-it-qat-q4_0-unquantized'
 # CONST_MODEL='/root/vllm/models/gemma-3-4b-it'
-CONST_MODEL='/root/vllm/models/gemma-3-4b-it-qat-q4_0-unquantized'
+# CONST_MODEL='/root/vllm/models/gemma-3-4b-it-qat-q4_0-unquantized'
 # CONST_MODEL='/root/vllm/models/gemma-3n-E2B-it'
 # CONST_MODEL='/root/vllm/models/gemma-3n-E4B-it'
 # CONST_MODEL='/root/vllm/models/deepseek-r1-0528-qwen3-8B'
@@ -32,9 +32,9 @@ def get_client() -> AsyncOpenAI:
     return AsyncOpenAI(base_url='http://bureau1.maple.maceroc.com:8001/v1', api_key='DUMMY')
     # return AsyncOpenAI(base_url='http://vmhost4.maple.maceroc.com:8001/v1', api_key='DUMMY')
 
-async def completions_1(client: AsyncOpenAI):
+async def completions_1(client: AsyncOpenAI, model_id: str):
     response = await client.completions.create(
-        model=CONST_MODEL,
+        model=model_id,
         prompt="Hi.",
         stream=False,
         max_tokens=2048,
@@ -44,13 +44,13 @@ async def completions_1(client: AsyncOpenAI):
     print(f"Response: {content.text}")
 
 
-async def chat_1(client: AsyncOpenAI):
+async def chat_1(client: AsyncOpenAI, model_id: str):
     response = await client.chat.completions.create(
         messages=[
             ChatCompletionSystemMessageParam(content="Your are a helpful assistant.", role="system"),
             ChatCompletionUserMessageParam(content="Hi.", role="user"),
         ],
-        model=CONST_MODEL,
+        model=model_id,
         max_tokens=2048,
     )
     # content = response.model_dump_json()
@@ -59,13 +59,13 @@ async def chat_1(client: AsyncOpenAI):
     print(f"Response: {content}")
 
 
-async def chat_2(client: AsyncOpenAI):
+async def chat_2(client: AsyncOpenAI, model_id: str):
     response = await client.chat.completions.create(
         messages=[
             ChatCompletionSystemMessageParam(content="Your are a helpful assistant.", role="system"),
             ChatCompletionUserMessageParam(content="What is the cause of the war in Syria?", role="user"),
         ],
-        model=CONST_MODEL,
+        model=model_id,
         max_tokens=1024,
         stream=True
     )
@@ -75,7 +75,7 @@ async def chat_2(client: AsyncOpenAI):
     print()
 
 
-async def chat_image(client: AsyncOpenAI):
+async def chat_image(client: AsyncOpenAI, model_id: str):
 
     with open("/home/mathieu/Pictures/generes/txt2img-images/2025-05-19/00009-341513889.png", "rb") as image_file:
         b64_image = base64.b64encode(image_file.read()).decode("utf-8")
@@ -94,7 +94,7 @@ async def chat_image(client: AsyncOpenAI):
                 ]
             ),
         ],
-        model=CONST_MODEL,
+        model=model_id,
         max_tokens=2048,
     )
     # content = response.model_dump_json()
@@ -111,7 +111,7 @@ class YearsAnswer(BaseModel):
     years: list[Conflict]
 
 
-async def chat_formatted_1(client: AsyncOpenAI):
+async def chat_formatted_1(client: AsyncOpenAI, model_id: str):
 
     json_schema_mapped = YearsAnswer.model_json_schema()
     json_schema = JSONSchema(name='response', schema=json_schema_mapped)
@@ -121,7 +121,7 @@ async def chat_formatted_1(client: AsyncOpenAI):
             ChatCompletionSystemMessageParam(content="Your are a helpful assistant.", role="system"),
             ChatCompletionUserMessageParam(content="What years had a new conflicts erupt in the middle east?", role="user"),
         ],
-        model=CONST_MODEL,
+        model=model_id,
         max_tokens=2048,
         response_format=ResponseFormatJSONSchema(
             json_schema=json_schema,
@@ -143,7 +143,7 @@ class SummaryResponse(BaseModel):
     # empty_document: Optional[bool]
 
 
-async def chat_large_prompt(client: AsyncOpenAI):
+async def chat_large_prompt(client: AsyncOpenAI, model_id: str):
     pdf_files_path = [
         '/home/mathieu/Downloads/Articles/Mai 2025/Aurores boréales au Québec _ quels secteurs pourraient être chanceux_ - MétéoMédia.pdf',
         '/home/mathieu/Downloads/Articles/Mai 2025/NIST.FIPS.186-5.pdf',
@@ -202,7 +202,7 @@ async def chat_large_prompt(client: AsyncOpenAI):
                         ]
                     ),
                 ],
-                model=CONST_MODEL,
+                model=model_id,
                 max_tokens=RESPONSE_LEN,
                 response_format=ResponseFormatJSONSchema(
                     json_schema=json_schema,
@@ -231,17 +231,19 @@ async def get_models(client: AsyncOpenAI):
     print("Models")
     for model in models:
         print(model)
+        return model.id
+    return None
 
 
 async def main():
     client = get_client()
-    await get_models(client)
-    # await completions_1(client)
-    # await chat_1(client)
-    await chat_2(client)
-    # await chat_image(client)
-    # await chat_formatted_1(client)
-    # await chat_large_prompt(client)
+    model = await get_models(client)
+    # await completions_1(client, model)
+    # await chat_1(client, model)
+    await chat_2(client, model)
+    # await chat_image(client, model)
+    # await chat_formatted_1(client, model)
+    # await chat_large_prompt(client, model)
 
 
 if __name__ == '__main__':
