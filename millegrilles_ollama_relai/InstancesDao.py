@@ -9,7 +9,7 @@ import openai
 from openai.types import Model as OpenaiModel
 from openai.types.chat import ChatCompletionSystemMessageParam, ChatCompletionUserMessageParam, \
     ChatCompletionAssistantMessageParam, ChatCompletion, ChatCompletionChunk, ChatCompletionContentPartTextParam, \
-    ChatCompletionContentPartImageParam
+    ChatCompletionContentPartImageParam, ChatCompletionContentPartParam
 from openai.types.shared_params import ResponseFormatJSONSchema
 from openai.types.shared_params.response_format_json_schema import JSONSchema
 from openai.types.chat.chat_completion_content_part_image_param import ImageURL
@@ -149,11 +149,12 @@ class OllamaModelParams(ModelParams):
 
 class OpenaiModelParams(ModelParams):
 
-    def __init__(self, id: str, model: OpenaiModel):
+    def __init__(self, id: str, model: OpenaiModel, server_params: dict):
         super().__init__(id)
         self.__model = model
-        self.__context_length = 4096
-        self.__capabilities = ['completion', 'vision']
+        self.__server_params = server_params
+        self.__context_length = server_params.get('context_length') or 4096
+        self.__capabilities = server_params.get('capabilities') or ['completion', 'vision']
         self.__load_parameters()
 
     def __load_parameters(self):
@@ -372,6 +373,29 @@ class OpenAiInstanceDao(InstanceDao):
     async def models(self):
         client = self.get_async_client(timeout=3)
 
+        server_params = {
+            'capabilities': ['completion']
+        }
+
+        # Access props (llamacpp)
+        try:
+            props_response = await client.get('props', cast_to=httpx.Response)
+        except openai.NotFoundError:
+            try:
+                props_response = await client.get('../props', cast_to=httpx.Response)
+            except openai.NotFoundError:
+                props_response = None
+
+        if props_response:
+            props = props_response.json()
+            modalities = props['modalities']
+            vision = modalities.get('vision') or False
+            if vision:
+                server_params['capabilities'].append('vision')
+            defaults = props['default_generation_settings']
+            context_length = defaults['n_ctx']
+            server_params['context_length'] = context_length
+
         try:
             model_list = await client.models.list()
             try:
@@ -396,7 +420,7 @@ class OpenAiInstanceDao(InstanceDao):
                 del known_models[model_id]
             except KeyError:
                 # New model, fetch information
-                model_params = OpenaiModelParams(model_id, model)
+                model_params = OpenaiModelParams(model_id, model, server_params)
                 updated_models[model_id] = model_params
                 added_models.append(model_id)
                 pass
@@ -418,9 +442,32 @@ class OpenAiInstanceDao(InstanceDao):
                 mapped_messages.append(ChatCompletionSystemMessageParam(content=message['content'], role="system"))
             elif role == 'user':
                 if last_role == 'user':
-                    mapped_messages[-1]['content'] += '\n\n' + message['content']  # Concatenate to last message
+                    # Append the text (same role) to the previous completion
+                    previous_message = mapped_messages[-1]
+                    previous_message['content'].append(ChatCompletionContentPartTextParam(text=message['content'], type="text"))
                 else:
-                    mapped_messages.append(ChatCompletionUserMessageParam(content=message['content'], role="user"))
+                    completions: list[ChatCompletionContentPartParam] = list()
+                    try:
+                        for img in message['images']:
+                            if isinstance(img, str):
+                                b64_image = img
+                            elif isinstance(img, bytes):
+                                b64_image = base64.b64encode(img).decode('utf-8')
+                            else:
+                                raise ValueError('Image in wrong format')
+
+                            image_completion = ChatCompletionContentPartImageParam(
+                                type="image_url",
+                                image_url=ImageURL(url=f"data:image/png;base64,{b64_image}", detail="auto")
+                            )
+                            completions.append(image_completion)
+                    except (TypeError, KeyError):
+                        pass
+
+                    # Add text part
+                    completions.append(ChatCompletionContentPartTextParam(text=message['content'], type="text"))
+                    completion = ChatCompletionUserMessageParam(role="user", content=completions)
+                    mapped_messages.append(completion)
             elif role == 'assistant':
                 if last_role == 'assistant':
                     mapped_messages[-1]['content'] += '\n\n' + message['content']  # Concatenate to last message
@@ -472,29 +519,9 @@ class OpenAiInstanceDao(InstanceDao):
 
         messages = list()
         if system:
-            messages.append(ChatCompletionSystemMessageParam(content=system, role="system"))
+            messages.append({'content': system, 'role': 'system'})
         if prompt:
-            if images:
-                image = images[0]
-                if len(images) > 1:
-                    raise ValueError("Only 1 image supported")
-
-                if isinstance(image, str):
-                    b64_image = image
-                elif isinstance(image, bytes):
-                    b64_image = base64.b64encode(image).decode('utf-8')
-                else:
-                    raise ValueError('Image in wrong format')
-
-                messages.append(ChatCompletionUserMessageParam(role="user", content=[
-                    ChatCompletionContentPartTextParam(type="text", text=prompt),
-                    ChatCompletionContentPartImageParam(
-                        type="image_url",
-                        image_url=ImageURL(url=f"data:image/png;base64,{b64_image}", detail="high")
-                    )
-                ]))
-            else:
-                messages.append(ChatCompletionUserMessageParam(content=prompt, role="user"))
+            messages.append({'role': 'user', 'content': prompt, 'images': images})
 
         return await self.chat(model, messages, stream, think, None, response_format, max_len, temperature)
 

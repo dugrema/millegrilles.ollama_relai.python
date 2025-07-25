@@ -14,6 +14,7 @@ from typing import Optional, AsyncGenerator, Any
 
 import pytz
 from ollama import ChatResponse
+from PIL import Image
 
 from millegrilles_messages.messages import Constantes as ConstantesMilleGrilles
 from millegrilles_messages.messages.EnveloppeCertificat import EnveloppeCertificat
@@ -28,6 +29,7 @@ from millegrilles_ollama_relai.OllamaInstanceManager import model_name_to_id, Ol
 from millegrilles_ollama_relai.OllamaKnowledgeBase import KnowledgBaseHandler
 from millegrilles_ollama_relai.OllamaTools import OllamaToolHandler
 from millegrilles_ollama_relai.Structs import MardownTextResponse
+from millegrilles_ollama_relai.Util import conditional_convert_to_png
 from millegrilles_ollama_relai.prompts.chat_system_prompts import CHAT_PROMPT_KNOWLEDGE_BASE, USER_INFORMATION_LAYOUT
 
 MAX_TOOL_ITERATIONS = 4
@@ -238,10 +240,13 @@ class OllamaChatHandler:
                             if 'vision' in model_capabilities:
                                 file_size = await self.__attachment_handler.download_decrypt_file(decryption_key_attached_file,
                                                                                                   attached_file, tmp_file)
+                                # Replaces the content of tmp_file with a PNG if the file is not either png or jpeg.
+                                await conditional_convert_to_png(mimetype, tmp_file)
+                                tmp_file.seek(0)
+                                content = await asyncio.to_thread(tmp_file.read)
+
                                 if image_attachments is None:
                                     image_attachments = list()
-
-                                content = await self.__attachment_handler.prepare_image(file_size, tmp_file)
                                 image_attachments.append(content)
                             else:
                                 self.__logger.debug(f"Ignoring image for model {chat_model} that does not support vision")

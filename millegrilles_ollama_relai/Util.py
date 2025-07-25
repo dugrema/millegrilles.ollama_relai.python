@@ -1,5 +1,10 @@
+import asyncio
 import binascii
+import tempfile
+
 import tiktoken
+
+from PIL import Image
 
 from millegrilles_messages.messages.Hachage import hacher
 
@@ -27,3 +32,13 @@ def cleanup_json_output(content: str):
     if content[0] == '`':
         return content.replace('```json', '').replace('```', '').strip()
     return content
+
+
+async def conditional_convert_to_png(mimetype: str, tmp_file: tempfile.TemporaryFile):
+    if mimetype not in ['image/png', 'image/jpg', 'image/jpeg']:
+        # Convert to PNG, overwrite tmp file
+        im = await asyncio.to_thread(Image.open, tmp_file)
+        tmp_file.seek(0)  # Will overwrite with PNG
+        await asyncio.to_thread(im.save, tmp_file, "png")
+        tmp_file.truncate()
+        tmp_file.seek(0)

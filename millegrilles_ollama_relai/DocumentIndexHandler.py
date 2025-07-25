@@ -33,7 +33,7 @@ from millegrilles_ollama_relai.InstancesDao import InstanceDao
 
 from millegrilles_ollama_relai.OllamaContext import OllamaContext
 from millegrilles_ollama_relai.OllamaInstanceManager import OllamaInstance, model_name_to_id, OllamaInstanceManager
-from millegrilles_ollama_relai.Util import decode_base64_nopad, cleanup_json_output
+from millegrilles_ollama_relai.Util import decode_base64_nopad, cleanup_json_output, conditional_convert_to_png
 from millegrilles_ollama_relai.Structs import SummaryText
 from millegrilles_ollama_relai.prompts.index_system_prompts import PROMPT_INDEXING_SYSTEM_IMAGES, \
     PROMPT_INDEXING_SYSTEM_DOCUMENT
@@ -356,8 +356,16 @@ class DocumentIndexHandler:
                         if image_file_to_download:
                             image_tmp_file = tempfile.NamedTemporaryFile(mode='wb+')
                             await self.__download_file(filename, fuuid, secret_key_str, image_file_to_download, image_tmp_file)
-                            # Process decrypted file
+
+                            # Replaces the content of tmp_file with a PNG if the file is not either png or jpeg.
                             image_tmp_file.seek(0)
+                            try:
+                                image_mimetype = job['image_file']['mimetype']
+                            except (AttributeError, KeyError):
+                                image_mimetype = 'image/webp'
+                            await conditional_convert_to_png(image_mimetype, image_tmp_file)
+                            image_tmp_file.seek(0)
+
                             job['image_tmp_file'] = image_tmp_file
 
                     except nacl.exceptions.RuntimeError as e:
@@ -810,6 +818,7 @@ async def summarize_file(client: InstanceDao, job: FileInformation, model: str,
         image_tmp_file.seek(0)
         system_prompt, command_prompt = await format_image_prompt(language)
         image_content = await asyncio.to_thread(image_tmp_file.read)
+
         response = await client.generate(
             model=model,
             prompt=command_prompt,

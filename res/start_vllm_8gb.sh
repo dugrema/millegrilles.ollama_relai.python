@@ -5,9 +5,8 @@ IMG="vllm/vllm-openai:v0.9.2"
 
 # MODEL="/root/vllm/models/gemma-3-1b-it"
 # MODEL="/root/vllm/models/gemma-3-4b-it"
-# MODEL="/root/vllm/models/gemma-3-4b-it-qat-Q4_K_M.gguf"
 # MODEL="/root/vllm/models/gemma-3-12b-it"
-# MODEL="/root/vllm/models/gemma-3-4b-it-qat-q4_0-unquantized"
+MODEL="/root/models/full/gemma-3-4b-it-qat-q4_0-unquantized"
 # MODEL="/root/vllm/models/gemma3-12b-it-qat_unquantized"
 # MODEL="/root/vllm/models/gemma-3-27b-it-qat-q4_0-unquantized"
 # MODEL="/root/vllm/models/gemma-3n-E2B-it-Q4_K_M.gguf"
@@ -17,10 +16,6 @@ IMG="vllm/vllm-openai:v0.9.2"
 # MODEL="/root/vllm/models/gemma-3n-E2B-it"
 # MODEL="/root/vllm/models/Mistral-Small-3.1-24B-Instruct-2503"
 # MODEL="/root/vllm/models/Devstral-Small-2507"
-# MODEL="/root/vllm/models/Mistral-Small-3.2-24B-Instruct-2506-Q4_K_M.gguf"
-# MODEL="/root/vllm/models/gemma-3-4b-it-qat-Q8_0.gguf"
-# MODEL="/root/vllm/models/gemma-3-4b-it-qat-q4_0.gguf"
-MODEL="/root/vllm/models/DeepSeek-R1-0528-Qwen3-8B-Q4_K_M.gguf"
 
 #    --network millegrille_net \
 #    -v /mnt/tas/users/mathieu/lib/vllm:/root/vllm \
@@ -31,14 +26,13 @@ MODEL="/root/vllm/models/DeepSeek-R1-0528-Qwen3-8B-Q4_K_M.gguf"
 docker run --runtime nvidia --gpus all --rm --name vllm --hostname vllm \
     -p 8001:8000 \
     -v ~/llm/huggingface:/root/.cache/huggingface \
-    -v /home/mathieu/llm/vllm:/root/vllm \
+    -v /home/mathieu/llm/models:/root/models \
     --ipc=host \
     --env "TORCH_CUDA_ARCH_LIST=8.0 8.6 8.7" \
     --env CUDA_LAUNCH_BLOCKING=1 \
     --network millegrille_net \
     $IMG --model "${MODEL}" --disable-log-requests --chat-template-content-format openai \
-    --max-model-len 4K --gpu-memory-utilization 0.85 --enforce-eager \
-    --load-format gguf
+    --quantization="bitsandbytes" --max-model-len 10K --gpu-memory-utilization 0.87 --enforce-eager
 
 # gemma3n-E4B
 #    --cpu-offload-gb 1.0 --quantization bitsandbytes --max-model-len 8K --gpu-memory-utilization 0.95 --enforce-eager
