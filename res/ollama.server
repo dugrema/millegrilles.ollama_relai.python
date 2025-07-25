@@ -58,9 +58,9 @@ server {
         client_max_body_size 64k;
     }
 
-    # VLLM - openai format
+    # Openai format (llama.cpp, vllm)
     location /v1 {
-        set $upstream_vllm http://vllm:8000;
+        set $upstream_vllm http://openai_backend:8000;
         proxy_pass $upstream_vllm;
         proxy_read_timeout 3m;
 
@@ -70,4 +70,21 @@ server {
         proxy_buffering off;  # Desactiver buffering de la reponse (download streaming)
         proxy_request_buffering off;  # Desactiver buffering de la request (upload)
     }
+
+    # llama.cpp server configuration
+    location /v1/props {
+        set $upstream_vllm http://openai_backend:8000;
+        proxy_pass $upstream_vllm;
+        proxy_read_timeout 3m;
+
+        # Remove V1, pass for to llama.cpp
+	    rewrite /v1/props /props  break;
+
+        client_max_body_size 64k;
+
+        # Desactiver buffering de transfert
+        proxy_buffering off;  # Desactiver buffering de la reponse (download streaming)
+        proxy_request_buffering off;  # Desactiver buffering de la request (upload)
+    }
+
 }

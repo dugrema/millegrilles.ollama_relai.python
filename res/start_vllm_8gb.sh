@@ -23,7 +23,7 @@ MODEL="/root/models/full/gemma-3-4b-it-qat-q4_0-unquantized"
 #    --block-size 1 --max-num-seqs 1 \
 #    --env VLLM_CPU_OMP_THREADS_BIND=0-3 \
 
-docker run --runtime nvidia --gpus all --rm --name vllm --hostname vllm \
+docker run --runtime nvidia --gpus all --rm --name vllm --hostname openai_backend \
     -p 8001:8000 \
     -v ~/llm/huggingface:/root/.cache/huggingface \
     -v /home/mathieu/llm/models:/root/models \
