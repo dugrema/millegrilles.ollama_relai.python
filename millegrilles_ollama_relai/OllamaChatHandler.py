@@ -401,7 +401,10 @@ class OllamaChatHandler:
                 think += chunk['message'].get('thinking')
             except TypeError:
                 pass  # No think block
-            buffer += chunk['message']['content']
+            try:
+                buffer += chunk['message']['content']
+            except TypeError:
+                pass  # No content
 
             now = datetime.datetime.now()
             if done or (tools_called is False and now > next_emit):
@@ -536,7 +539,10 @@ class OllamaChatHandler:
                             messages.append({'role': 'tool', 'content': str(output), 'name': tool_call.function.name})
                             tools_called = True
 
-                    cumulative_output += part.message['content']
+                    try:
+                        cumulative_output += part.message['content']
+                    except TypeError:
+                        pass  # None content
                     try:
                         cumulative_thinking += part.message.get('thinking')
                     except TypeError:

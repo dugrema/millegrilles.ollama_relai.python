@@ -159,8 +159,9 @@ class OpenaiModelParams(ModelParams):
     def __load_parameters(self):
         # Overrides
         try:
+            # VLLM
             self.__context_length = self.__model.model_extra['max_model_len']
-        except AttributeError:
+        except (KeyError, AttributeError):
             pass  # No custom parameters
 
     @property
@@ -370,9 +371,16 @@ class OpenAiInstanceDao(InstanceDao):
 
     async def models(self):
         client = self.get_async_client(timeout=3)
+
         try:
-            model_data, metadata = await client.models.list()
-            models = model_data[1]
+            model_list = await client.models.list()
+            try:
+                # vllm
+                model_data, metadata = model_list
+                models = model_data[1]
+            except ValueError:  # llamacpp
+                model_data = model_list
+                models = model_data.data
         except (ConnectionError, httpx.ConnectError, OpenAIError) as e:
             raise ClientDaoError(e)
 
