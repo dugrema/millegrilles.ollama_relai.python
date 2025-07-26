@@ -448,7 +448,10 @@ class OllamaChatHandler:
             except KeyError:
                 pass  # Ok, already removed or on another instance
 
-            buffer += chunk.text
+            try:
+                buffer += chunk.text
+            except TypeError:
+                pass  # Empty chunk
             if chunk.complete_block:
                 buffer += '\n\n'
 

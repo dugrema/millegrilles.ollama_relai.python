@@ -5,6 +5,7 @@ from ssl import SSLContext
 import httpx
 import logging
 
+import openai
 import redis.asyncio as redis
 from redis.exceptions import ConnectionError as RedisConnectionError
 from ollama import AsyncClient as OllamaAsyncClient, ListResponse, ResponseError as OllamaResponseError
@@ -174,7 +175,7 @@ class OllamaInstance:
             if current_ready != self.__ready:
                 send_update_event = True
 
-        except (ConnectionError, httpx.ConnectError, ClientDaoError) as e:
+        except (ConnectionError, httpx.ConnectError, ClientDaoError, openai.InternalServerError) as e:
             # Failed to connect
             if self.__logger.isEnabledFor(logging.DEBUG):
                 self.__logger.exception(f"Connection error on {self.url}")
