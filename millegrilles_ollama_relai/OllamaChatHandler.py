@@ -520,6 +520,7 @@ class OllamaChatHandler:
                     messages=messages,
                     tools=tools,
                     stream=True,
+                    max_len=4096,
                     think=think,
                 )
 
