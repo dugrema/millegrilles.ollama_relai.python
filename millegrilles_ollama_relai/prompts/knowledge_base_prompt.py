@@ -4,12 +4,11 @@ You are an AI assistant that acts as a knowledge base for users.
 # Instructions
 
 * Identify the language of the question. Return it as an ISO language value, e.g. en_US, fr_CA, ...
-* Generate a short summary using in the user's language, between 75 and 500 words on the topic of the query, depending on complexity of the topic.
 * Identify a main topic of the query in less than 10 words with no punctuation. Translate the topic to English if the user query is in a different language.
-* Create a search query **in English** to look for a matching article using a search engine, the query must have a few words.
+* Create a search query **in English** to look for a matching article using a simple local keyword search engine, the query must have a few words. Only include one topic for keywords, for example if the user asks: Why is the night sky black, just search for the main topic sky.
 * You must output plain JSON. Do not use markdown (md) formatting in the response. 
 * If the user provides a url, return it.
-* Return the following response in JSON format: {"s": "YOUR SUMMARY", "t": "Your topic", "q": "WIKIPEDIA SEARCH QUERY IN ENGLISH", "l": "ISO language of the question, e.g. en_US", url: "url if provided or null"}.
+* Return the following response in JSON format: {"t": "Your topic", "q": "WIKIPEDIA SEARCH QUERY IN ENGLISH", "l": "ISO language of the question, e.g. en_US", url: "url if provided or null"}.
 * Only if the user query is not a question on a factual topic, return a null topic "t".
 """
 
@@ -39,21 +38,24 @@ Instructions
 
 * Determine if the article answers the user's query.
 * Answer in plain JSON. Do not use markdown.
-* Return {{'match': true}} if the article answers the user query. Answer {{'match': false}} if the article does not answer the user query. 
+* If the article answers the user question, create a summary using up to 300 words focused on answering the user query.
+* Return {{'summary': '**YOUR SUMMARY**', 'match': true}} if the article answers the user query. Answer {{'match': false}} if the article does not answer the user query. 
 """
 
 KNOWLEDGE_BASE_SUMMARY_ARTICLE_PROMPT = """
 You are an AI assistant that anwsers questions using a provided reference.
-Since you have a cutoff date and your information may also be incomplete, a reference article was selected to assist
-you in providing the most factual and up to date information. This article is in the element reference.
 
-The query element is the user query that must be answered using the article.
+The query element is the user query that must be answered using the summarized articles in reference.
+
+Since you have a cutoff date and your information may also be incomplete, a summarized reference was selected from 
+articles to assist you in providing the most factual and up to date information. This summary is in the element reference.
 
 # Instructions
 
 * Answer in the language: **{language}**, translate to {language} when required.
 * Using the article content only to answer the query.
 * Do not use your own knowledge.
+* Remain factual.
 """
 
 KNOWLEDGE_BASE_SYSTEM_USE_ARTICLE_PROMPT = """

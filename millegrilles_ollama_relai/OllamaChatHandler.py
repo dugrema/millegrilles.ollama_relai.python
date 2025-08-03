@@ -279,6 +279,8 @@ class OllamaChatHandler:
 
             # Create the stream task
             stream_task = asyncio.create_task(stream_coro)
+            done_event = asyncio.Event()
+            keepalive_task = asyncio.create_task(self.keepalive_stream(enveloppe, correlation_id, reply_to, done_event))
 
             # Save task to allow cancellation, then wait on completion
             self.__running_chats[chat_id] = stream_task
@@ -291,10 +293,13 @@ class OllamaChatHandler:
                     raise e  # Stopping
             finally:
                 # Cleanup task
+                done_event.set()
                 try:
                     del self.__running_chats[chat_id]
                 except KeyError:
                     pass
+
+            await keepalive_task  # Ensure task done
 
             # Check if the output was completed or interrupted
             complete = output['complete']
@@ -562,6 +567,15 @@ class OllamaChatHandler:
                 # If no tools were called, the chat is done. If we have tool responses, loop for a new iteration.
                 if not tools_called:
                     break  # Done
+
+    async def keepalive_stream(self, enveloppe: EnveloppeCertificat, correlation_id: str, reply_to: str, stop_event: asyncio.Event):
+        while not stop_event.is_set():
+            await self.__emit_stream_response(enveloppe, correlation_id, reply_to, '')
+            try:
+                await asyncio.wait_for(stop_event.wait(), 15)
+                return  # Done
+            except asyncio.TimeoutError:
+                pass
 
     async def knowledge_chat(self, instance: OllamaInstance, user_profile: dict, current_message_content: str):
         # client = instance.get_async_client(self.__context.configuration)

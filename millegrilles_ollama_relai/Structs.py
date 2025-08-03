@@ -10,7 +10,7 @@ class SummaryText(BaseModel):
 
 
 class SummaryKeywords(BaseModel):
-    s: str
+    # s: str
     t: Optional[str]
     q: Optional[str]
     l: str
@@ -30,11 +30,13 @@ class MardownTextResponse:
 
 class KnowledgeBaseSearchResponse:
 
-    def __init__(self, search_url: Optional[str], reference_title: str, reference_url: str):
+    def __init__(self, search_url: Optional[str], reference_title: str, reference_url: str, summary: str):
         self.search_url = search_url
         self.reference_title = reference_title
         self.reference_url = reference_url
+        self.summary = summary
 
 
 class MatchResult(BaseModel):
+    summary: str
     match: bool
