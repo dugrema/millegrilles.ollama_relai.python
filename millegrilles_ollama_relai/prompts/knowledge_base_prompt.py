@@ -5,7 +5,7 @@ You are an AI assistant that acts as a knowledge base for users.
 
 * Identify the language of the question. Return it as an ISO language value, e.g. en_US, fr_CA, ...
 * Identify a main topic of the query in less than 10 words with no punctuation. Translate the topic to English if the user query is in a different language.
-* Create a search query **in English** to look for a matching article using a simple local keyword search engine, the query must have a few words. Only include one topic for keywords, for example if the user asks: Why is the night sky black, just search for the main topic sky.
+* Create a search query **in English** to look for a matching article using a simple local keyword search engine, the query must have a few words. Only include one topic for keywords, for example if the user asks: Why is the night sky black, just search for the main topic "sky".
 * You must output plain JSON. Do not use markdown (md) formatting in the response. 
 * If the user provides a url, return it.
 * Return the following response in JSON format: {"t": "Your topic", "q": "WIKIPEDIA SEARCH QUERY IN ENGLISH", "l": "ISO language of the question, e.g. en_US", url: "url if provided or null"}.
@@ -13,7 +13,7 @@ You are an AI assistant that acts as a knowledge base for users.
 """
 
 KNOWLEDGE_BASE_FIND_PAGE_PROMPT = """
-You are provided with a user query and a list of search results. Find up to 3 results that best match the intent
+You are provided with a user query and a list of search results. Find up to 4 results that best match the intent
 of the user query.
 
 <query>
@@ -34,12 +34,12 @@ You a provided with a user query and an article. You must determine if the artic
 {query}
 </query>
 
-Instructions
+# Instructions
 
-* Determine if the article answers the user's query.
+* First, determine if the article answers the user's query.
+** If the article answers the user question, create a summary using up to 300 words focused on answering the user query. Return {{'summary': '**YOUR SUMMARY**', 'match': true}}.
+** If the article does not answer the user query, return the answer {{'match': false}}. 
 * Answer in plain JSON. Do not use markdown.
-* If the article answers the user question, create a summary using up to 300 words focused on answering the user query.
-* Return {{'summary': '**YOUR SUMMARY**', 'match': true}} if the article answers the user query. Answer {{'match': false}} if the article does not answer the user query. 
 """
 
 KNOWLEDGE_BASE_SUMMARY_ARTICLE_PROMPT = """
