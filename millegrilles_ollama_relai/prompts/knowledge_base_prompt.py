@@ -37,13 +37,13 @@ You a provided with a user query and an article. You must determine if the artic
 # Instructions
 
 * First, determine if the article answers the user's query.
-** If the article answers the user question, create a summary using up to 300 words focused on answering the user query. Return {{'summary': '**YOUR SUMMARY**', 'match': true}}.
-** If the article does not answer the user query, return the answer {{'match': false}}. 
+** If the article can help answer the user query, create a summary using up to 300 words focused on answering the user query. Return {{'summary': '**YOUR SUMMARY**', 'match': true}}.
+** If the article does not contain relevant information to answer the user query, return the answer {{'match': false}}. 
 * Answer in plain JSON. Do not use markdown.
 """
 
 KNOWLEDGE_BASE_SUMMARY_ARTICLE_PROMPT = """
-You are an AI assistant that anwsers questions using a provided reference.
+You are an AI assistant that answers questions using a provided reference.
 
 The query element is the user query that must be answered using the summarized articles in reference.
 
@@ -58,24 +58,24 @@ articles to assist you in providing the most factual and up to date information.
 * Remain factual.
 """
 
-KNOWLEDGE_BASE_SYSTEM_USE_ARTICLE_PROMPT = """
-You are an AI assistant that verifies summaries using referenced articles.
-
-The summary element is a 500 word or less answer to the user query already provided to the user.
-This is a verification step for the content of the summary element looking for inaccuracies and contradictions to
-avoid misleading the user by using the reference element.
-
-# Instructions
-
-* Answer in the user's language: **{language}**, translate to {language} when required.
-* Use the reference **exclusively** to verify and correct the summary. Do not use your own knowledge.
-* If there are no inaccuracies, respond that the summary is accurate.
-* If there are inaccuracies: 
-** Only list statements that are inaccurate.
-** Do not list statements that are accurate.
-** Do not list statements that are vague but do not contradict the reference.
-* Do not repeat the summary element.
-* Do not answer the user query.
-* Use markdown formatting.
-* Translate to language {language} when required.
-"""
+# KNOWLEDGE_BASE_SYSTEM_USE_ARTICLE_PROMPT = """
+# You are an AI assistant that verifies summaries using referenced articles.
+#
+# The summary element is a 500 word or less answer to the user query already provided to the user.
+# This is a verification step for the content of the summary element looking for inaccuracies and contradictions to
+# avoid misleading the user by using the reference element.
+#
+# # Instructions
+#
+# * Answer in the user's language: **{language}**, translate to {language} when required.
+# * Use the reference **exclusively** to verify and correct the summary. Do not use your own knowledge.
+# * If there are no inaccuracies, respond that the summary is accurate.
+# * If there are inaccuracies:
+# ** Only list statements that are inaccurate.
+# ** Do not list statements that are accurate.
+# ** Do not list statements that are vague but do not contradict the reference.
+# * Do not repeat the summary element.
+# * Do not answer the user query.
+# * Use markdown formatting.
+# * Translate to language {language} when required.
+# """

@@ -6,19 +6,19 @@ import requests
 import urllib.parse
 from urllib.parse import urlparse
 
-from typing import AsyncGenerator, Any, Union, Optional
+from typing import AsyncGenerator, Any, Union
 
 from bs4 import BeautifulSoup
-from ollama import GenerateResponse, AsyncClient
+from ollama import GenerateResponse
 
 from millegrilles_ollama_relai.InstancesDao import InstanceDao, MessageWrapper
 from millegrilles_ollama_relai.OllamaContext import OllamaContext
 from millegrilles_ollama_relai.OllamaInstanceManager import OllamaInstance
 from millegrilles_ollama_relai.Structs import SummaryKeywords, LinkIdPicker, KnowledgeBaseSearchResponse, \
     MardownTextResponse, MatchResult
-from millegrilles_ollama_relai.Util import check_token_len, cleanup_json_output
+from millegrilles_ollama_relai.Util import cleanup_json_output
 from millegrilles_ollama_relai.prompts.knowledge_base_prompt import KNOWLEDGE_BASE_INITIAL_SUMMARY_PROMPT, \
-    KNOWLEDGE_BASE_FIND_PAGE_PROMPT, KNOWLEDGE_BASE_SYSTEM_USE_ARTICLE_PROMPT, KNOWLEDGE_BASE_SUMMARY_ARTICLE_PROMPT, \
+    KNOWLEDGE_BASE_FIND_PAGE_PROMPT, KNOWLEDGE_BASE_SUMMARY_ARTICLE_PROMPT, \
     KNOWLEDGE_BASE_CHECK_ARTICLE_PROMPT
 
 CONST_DEFAULT_CONTEXT_LENGTH = 8192
@@ -156,6 +156,7 @@ class KnowledgBaseHandler:
                 article['url'] = url
                 # return article
                 # summarys.append(article)
+                self.__logger.debug("Article chosen: %s", article)
                 yield article
             else:
                 self.__logger.debug("Article %s does not answer the user's query", article['title'])
@@ -238,50 +239,50 @@ class KnowledgBaseHandler:
         async for value in stream:
             yield value
 
-    async def check_summary(self, user_prompt: str, language: str, assistant_response: str, article: str):
-        article_truncated = article[:self._limit_article]
-
-        prompt = f"""
-    <query>
-    {user_prompt}
-    </query>
-
-    <reference>
-    {article_truncated}
-    </reference>
-
-    <summary>
-    {assistant_response}
-    </summary>
-
-    <instructions>
-    Important: answer in **{language}**.
-    Put the heading: # Verification
-    Proceed to verify the summary element using the reference element as per system prompt.
-    </instructions>
-    """
-
-        # print(article_truncated)
-        # token_len = check_token_len(prompt + KNOWLEDGE_BASE_SYSTEM_USE_ARTICLE_PROMPT)
-        # print(f"Prompt len: {len(prompt)}, System prompt len: {len(KNOWLEDGE_BASE_SYSTEM_USE_ARTICLE_PROMPT)}, Total token len: {token_len}")
-        # if token_len > CONST_CONTEXT_LEN - 700:  # Reserve 700 token for model template (not exact)
-        #    raise Exception("Prompt too long")
-
-        params = {'language': language}
-        formatted_prompt = KNOWLEDGE_BASE_SYSTEM_USE_ARTICLE_PROMPT.format(**params)
-
-        stream = await self.__client.generate(
-            model=self.__model,
-            system=formatted_prompt,
-            think=None,
-            prompt=prompt,
-            stream=True,
-            max_len=self.__num_predict_response,
-            temperature=0.1,
-        )
-
-        async for value in stream:
-            yield value
+    # async def check_summary(self, user_prompt: str, language: str, assistant_response: str, article: str):
+    #     article_truncated = article[:self._limit_article]
+    #
+    #     prompt = f"""
+    # <query>
+    # {user_prompt}
+    # </query>
+    #
+    # <reference>
+    # {article_truncated}
+    # </reference>
+    #
+    # <summary>
+    # {assistant_response}
+    # </summary>
+    #
+    # <instructions>
+    # Important: answer in **{language}**.
+    # Put the heading: # Verification
+    # Proceed to verify the summary element using the reference element as per system prompt.
+    # </instructions>
+    # """
+    #
+    #     # print(article_truncated)
+    #     # token_len = check_token_len(prompt + KNOWLEDGE_BASE_SYSTEM_USE_ARTICLE_PROMPT)
+    #     # print(f"Prompt len: {len(prompt)}, System prompt len: {len(KNOWLEDGE_BASE_SYSTEM_USE_ARTICLE_PROMPT)}, Total token len: {token_len}")
+    #     # if token_len > CONST_CONTEXT_LEN - 700:  # Reserve 700 token for model template (not exact)
+    #     #    raise Exception("Prompt too long")
+    #
+    #     params = {'language': language}
+    #     formatted_prompt = KNOWLEDGE_BASE_SYSTEM_USE_ARTICLE_PROMPT.format(**params)
+    #
+    #     stream = await self.__client.generate(
+    #         model=self.__model,
+    #         system=formatted_prompt,
+    #         think=None,
+    #         prompt=prompt,
+    #         stream=True,
+    #         max_len=self.__num_predict_response,
+    #         temperature=0.1,
+    #     )
+    #
+    #     async for value in stream:
+    #         yield value
 
     async def __process(self, instance: OllamaInstance, query: str) -> AsyncGenerator[Union[SummaryKeywords, KnowledgeBaseSearchResponse, GenerateResponse, MardownTextResponse], Any]:
         # Find model, update context_length
