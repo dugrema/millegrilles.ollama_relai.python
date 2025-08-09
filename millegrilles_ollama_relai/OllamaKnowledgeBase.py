@@ -24,6 +24,7 @@ from millegrilles_ollama_relai.prompts.knowledge_base_prompt import KNOWLEDGE_BA
 
 CONST_DEFAULT_CONTEXT_LENGTH = 8192
 CONST_TEMPERATURE = 0.2
+CONST_TEMPERATURE_SEARCH = 1.0
 
 CONST_KIWIX_WIKIPEDIA_EN_SEARCH_LABEL = 'kiwixWikipediaEnSearch'
 
@@ -57,7 +58,7 @@ class KnowledgBaseHandler:
                 think=None,
                 response_format=SummaryKeywords,
                 max_len=self.__num_predict_summary,
-                temperature=CONST_TEMPERATURE,
+                temperature=CONST_TEMPERATURE_SEARCH,
             )
         except AttributeError:
             output = await self.__client.generate(
@@ -312,6 +313,7 @@ class KnowledgBaseHandler:
         previous_summary: Optional[SummaryKeywords] = None
 
         if not reference_url:
+            reference_content_list = list()
             for i in range(0, 3):
                 # Support iterative refining of keywords
                 if previous_summary:
@@ -330,7 +332,6 @@ class KnowledgBaseHandler:
 
                 selected_articles = list()
                 # selected_articles = await self.search_query(summary.q, query, links)
-                reference_content_list = list()
                 async for article in self.search_query(query, links):
                     selected_articles.append(article)
                     reference_content_list.append('\n'.join([article['title'], article['summary']]))
@@ -346,6 +347,7 @@ class KnowledgBaseHandler:
                     return  # Done
 
                 reference_content = '\n\n'.join(reference_content_list)
+                break  # Multiple articles, produce a summary of
             else:
                 yield MardownTextResponse(
                     text='**No match** found for this topic. You may want to verify this information from a reliable source.')
