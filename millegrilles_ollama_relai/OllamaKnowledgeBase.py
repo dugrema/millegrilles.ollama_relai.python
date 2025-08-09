@@ -4,9 +4,10 @@ import logging
 
 import requests
 import urllib.parse
+
 from urllib.parse import urlparse
 
-from typing import AsyncGenerator, Any, Union
+from typing import AsyncGenerator, Any, Union, Optional
 
 from bs4 import BeautifulSoup
 from ollama import GenerateResponse
@@ -19,7 +20,7 @@ from millegrilles_ollama_relai.Structs import SummaryKeywords, LinkIdPicker, Kno
 from millegrilles_ollama_relai.Util import cleanup_json_output
 from millegrilles_ollama_relai.prompts.knowledge_base_prompt import KNOWLEDGE_BASE_INITIAL_SUMMARY_PROMPT, \
     KNOWLEDGE_BASE_FIND_PAGE_PROMPT, KNOWLEDGE_BASE_SUMMARY_ARTICLE_PROMPT, \
-    KNOWLEDGE_BASE_CHECK_ARTICLE_PROMPT
+    KNOWLEDGE_BASE_CHECK_ARTICLE_PROMPT, KNOWLEDGE_BASE_SUBSEQUENT_SUMMARY_SYSTEM, KNOWLEDGE_BASE_SUBSEQUENT_SUMMARY_PROMPT
 
 CONST_DEFAULT_CONTEXT_LENGTH = 8192
 CONST_TEMPERATURE = 0.2
@@ -44,27 +45,47 @@ class KnowledgBaseHandler:
     def _limit_article(self):
         return int(2.5 * (self.__context_length - 1024))
 
-    async def parse_query(self, query: str) -> SummaryKeywords:
-        output = await self.__client.generate(
-            model=self.__model,
-            system=KNOWLEDGE_BASE_INITIAL_SUMMARY_PROMPT,
-            prompt=query,
-            think=None,
-            response_format=SummaryKeywords,
-            max_len=self.__num_predict_summary,
-            temperature=CONST_TEMPERATURE,
-        )
+    async def parse_query(self, query: str, previous_summary: Optional[SummaryKeywords] = None) -> SummaryKeywords:
+        try:
+            unsuccessful_keywords = previous_summary.q
+            params = {'query': query, 'previous': unsuccessful_keywords}
+            command_prompt = KNOWLEDGE_BASE_SUBSEQUENT_SUMMARY_PROMPT.format(**params)
+            output = await self.__client.generate(
+                model=self.__model,
+                system=KNOWLEDGE_BASE_SUBSEQUENT_SUMMARY_SYSTEM,
+                prompt=command_prompt,
+                think=None,
+                response_format=SummaryKeywords,
+                max_len=self.__num_predict_summary,
+                temperature=CONST_TEMPERATURE,
+            )
+        except AttributeError:
+            output = await self.__client.generate(
+                model=self.__model,
+                system=KNOWLEDGE_BASE_INITIAL_SUMMARY_PROMPT,
+                prompt=query,
+                think=None,
+                response_format=SummaryKeywords,
+                max_len=self.__num_predict_summary,
+                temperature=CONST_TEMPERATURE,
+            )
+
         # content = content.replace('```json', '').replace('```', '').strip()
         content = cleanup_json_output(output.message['content'])
         response = SummaryKeywords.model_validate_json(content)
         return response
 
-    async def search_query(self, topic: str, query: str, search_results: list[dict]) -> AsyncGenerator[dict, Any]:
+    async def search_query(self, query: str, search_results: list[dict]) -> AsyncGenerator[dict, Any]:
         # Extract the title, description and linkId to put in the context
         mapped_results = [{
             'link_id': r['linkId'],
             'title': r['title'],
         } for r in search_results]
+
+        try:
+            mapped_results = mapped_results[0:4]  # Keep 4 at most
+        except IndexError:
+            pass
 
         prompt = f"""
     <searchResults>
@@ -171,17 +192,6 @@ class KnowledgBaseHandler:
         search_url = self.__context.url_configuration['urls'][CONST_KIWIX_WIKIPEDIA_EN_SEARCH_LABEL]
         params = {'query': urllib.parse.quote_plus(topic)}
         search_url = search_url.format(**params)
-
-        # params = [
-        #     "books.name=wikipedia_en_all_maxi_2023-11",
-        #     # f"pattern={urllib.parse.quote_plus(", ".join(keywords))}",
-        #     f"pattern={urllib.parse.quote_plus(topic)}",
-        #     "userlang=en",
-        #     "start=1",
-        #     "pageLength=30",
-        # ]
-        params = "&".join(params)
-        # search_url = f"{self.__server_hostname}/kiwix/search?{params}"
 
         response = await asyncio.to_thread(requests.get, search_url)
         response.raise_for_status()
@@ -295,37 +305,51 @@ class KnowledgBaseHandler:
         yield summary
 
         # Perform search
-        if summary.t is None:
+        if summary.q is None:
             return  # Done
 
         reference_url = summary.url
+        previous_summary: Optional[SummaryKeywords] = None
 
         if not reference_url:
-            search_url, links = await self.search_topic(summary.q)
-            # Find matching page
-            # chosen_link, reference_url, reference_content = await self.search_query(summary.q, query, links)
+            for i in range(0, 3):
+                # Support iterative refining of keywords
+                if previous_summary:
+                    summary = await self.parse_query(query, previous_summary)
+                    if previous_summary.q == summary.q:
+                        yield MardownTextResponse(text='**No match** found for this topic.')
+                        return
+                    else:
+                        yield summary  # New search keywords
 
-            selected_articles = list()
-            # selected_articles = await self.search_query(summary.q, query, links)
-            reference_content_list = list()
-            async for article in self.search_query(summary.q, query, links):
-                selected_articles.append(article)
-                reference_content_list.append('\n'.join([article['title'], article['summary']]))
-                yield KnowledgeBaseSearchResponse(search_url=search_url, reference_title=article['title'], reference_url=article['url'], summary=article['summary'])
+                previous_summary = summary
 
-            if len(reference_content_list) == 0:
-                yield MardownTextResponse(text='**No match** found for this topic. You may want to verify this information from a reliable source.')
+                search_url, links = await self.search_topic(summary.q)
+                # Find matching page
+                # chosen_link, reference_url, reference_content = await self.search_query(summary.q, query, links)
+
+                selected_articles = list()
+                # selected_articles = await self.search_query(summary.q, query, links)
+                reference_content_list = list()
+                async for article in self.search_query(query, links):
+                    selected_articles.append(article)
+                    reference_content_list.append('\n'.join([article['title'], article['summary']]))
+                    yield KnowledgeBaseSearchResponse(search_url=search_url, reference_title=article['title'], reference_url=article['url'], summary=article['summary'])
+
+                if len(reference_content_list) == 0:
+                    # yield MardownTextResponse(text='**No match** found for this topic. You may want to verify this information from a reliable source.')
+                    # return  # Done
+                    continue  # Retry
+                elif len(reference_content_list) == 1:
+                    # Only one article. The summary is the answer.
+                    yield MardownTextResponse(text='\n\n# Answer\nNo further references found. The answer is the summary above.')
+                    return  # Done
+
+                reference_content = '\n\n'.join(reference_content_list)
+            else:
+                yield MardownTextResponse(
+                    text='**No match** found for this topic. You may want to verify this information from a reliable source.')
                 return  # Done
-            elif len(reference_content_list) == 1:
-                # Only one article. The summary is the answer.
-                yield MardownTextResponse(text='\n\n# Answer\nNo further references found. The answer is the summary above.')
-                return  # Done
-
-            # reference_content_list = list()
-            # for article in selected_articles:
-            #     reference_content_list.append('\n'.join([article['title'], article['content']]))
-            #     yield KnowledgeBaseSearchResponse(search_url=search_url, reference_title=article['title'], reference_url=article['url'], summary=article['summary'])
-            reference_content = '\n\n'.join(reference_content_list)
         else:
             parsed_url = urlparse(reference_url)
             local_hostname = urlparse(self.__context.url_configuration['urls'][CONST_KIWIX_WIKIPEDIA_EN_SEARCH_LABEL])
