@@ -338,7 +338,7 @@ class KnowledgBaseHandler:
                     yield KnowledgeBaseSearchResponse(search_url=search_url, reference_title=article['title'], reference_url=article['url'], summary=article['summary'])
 
                 if len(reference_content_list) == 0:
-                    # yield MardownTextResponse(text='**No match** found for this topic. You may want to verify this information from a reliable source.')
+                    # yield MardownTextResponse(text='**No match** found for this topic.')
                     # return  # Done
                     continue  # Retry
                 elif len(reference_content_list) == 1:
@@ -349,8 +349,7 @@ class KnowledgBaseHandler:
                 reference_content = '\n\n'.join(reference_content_list)
                 break  # Multiple articles, produce a summary of
             else:
-                yield MardownTextResponse(
-                    text='**No match** found for this topic. You may want to verify this information from a reliable source.')
+                yield MardownTextResponse(text='**No match** found for this topic.')
                 return  # Done
         else:
             parsed_url = urlparse(reference_url)
