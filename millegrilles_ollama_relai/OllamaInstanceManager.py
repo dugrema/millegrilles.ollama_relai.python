@@ -192,62 +192,6 @@ class OllamaInstance:
         if send_update_event:
             await self.send_model_update_event()
 
-
-    # client = self.get_async_client(self.__context.configuration)
-        # try:
-        #     # Test connection by getting currently loaded model information
-        #     self.__ollama_status_response = await client.ps()
-        #     self.__model_list_response = await client.list()
-        #
-        #     current_model_ids = set(self.__ollama_model_by_id.keys())
-        #
-        #     send_update_event = False
-        #     for model in self.__model_list_response.models:
-        #         model_id = model_name_to_id(model.model)
-        #         update = False
-        #         try:
-        #             existing_model = self.__ollama_model_by_id[model_id]
-        #             if existing_model.model.modified_at < model.modified_at:
-        #                 # Model has been updated
-        #                 update = True
-        #         except KeyError:
-        #             update = True
-        #         else:
-        #             current_model_ids.remove(model_id)  # Model still used
-        #
-        #         if update:
-        #             # Add model to list
-        #             show_model = await client.show(model.model)
-        #             model_params = OllamaModelParams(model_id, model, show_model)
-        #             self.__ollama_model_by_id[model_id] = model_params
-        #
-        #             send_update_event = True  # Model added/updated
-        #
-        #     # Remove models that are no longer present
-        #     for model_id in current_model_ids:
-        #         send_update_event = True  # Model removed
-        #         del self.__ollama_model_by_id[model_id]
-        #
-        #     # Status ready is True if at least 1 model is available
-        #     self.__ready = len(self.__ollama_model_by_id) > 0
-        #
-        #     if send_update_event:
-        #         await self.send_model_update_event()
-        #
-        #     self.__logger.debug(f"Connection OK: {self.url}")
-        # except (ConnectionError, httpx.ConnectError, ResponseError) as e:
-        #     # Failed to connect
-        #     if self.__logger.isEnabledFor(logging.DEBUG):
-        #         self.__logger.exception(f"Connection error on {self.url}")
-        #     else:
-        #         self.__logger.info(f"Connection error on {self.url}: %s" % str(e))
-        #
-        #     # Reset status, avoids picking this instance up
-        #     self.__ready = False
-        #     self.__ollama_status_response = None
-        #     self.__model_list_response = None
-        #     self.__ollama_model_by_id.clear()
-
     async def __maintain_model_keys(self):
         try:
             current_rks = set(self.__consumer.routing_keys)
@@ -282,10 +226,6 @@ class OllamaInstance:
         else:
             params = {'host':connection_url}
         return params
-
-    # def get_async_client(self, configuration: OllamaConfiguration, timeout=None) -> OllamaAsyncClient:
-    #     options = self.get_client_options(configuration)
-    #     return OllamaAsyncClient(timeout=timeout, **options)
 
     @property
     def connection(self) -> Optional[InstanceDao]:
