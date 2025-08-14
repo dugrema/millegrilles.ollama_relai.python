@@ -264,6 +264,7 @@ class KnowledgBaseHandler:
     async def __process(self, instance: OllamaInstance, query: str) -> AsyncGenerator[Union[SummaryKeywords, KnowledgeBaseSearchResponse, GenerateResponse, MardownTextResponse], Any]:
         # Find model, update context_length
         try:
+            self.__logger.info("Available models: %s", [': '.join([m.id, m.name]) for m in instance.models])
             model_info = self.select_model(instance)
         except KeyError as ke:
             self.__logger.error("No model available for running the query: %s", ke)
