@@ -12,7 +12,7 @@ from typing import AsyncGenerator, Any, Union, Optional
 from bs4 import BeautifulSoup
 from ollama import GenerateResponse
 
-from millegrilles_ollama_relai.InstancesDao import InstanceDao, MessageWrapper
+from millegrilles_ollama_relai.InstancesDao import InstanceDao, MessageWrapper, OllamaModelParams
 from millegrilles_ollama_relai.OllamaContext import OllamaContext
 from millegrilles_ollama_relai.OllamaInstanceManager import OllamaInstance
 from millegrilles_ollama_relai.Structs import SummaryKeywords, LinkIdPicker, KnowledgeBaseSearchResponse, \
@@ -36,7 +36,8 @@ class KnowledgBaseHandler:
         self.__client = client
         # self.__server_hostname = 'https://libs.millegrilles.com'
 
-        self.__model = context.model_configuration.get('knowledge_model_name') or context.chat_configuration['model_name']
+        # self.__model: Optional[str] = None
+        self.__model_info: Optional[OllamaModelParams] = None
 
         self.__context_length = CONST_DEFAULT_CONTEXT_LENGTH
         self.__num_predict_summary = 768
@@ -46,13 +47,41 @@ class KnowledgBaseHandler:
     def _limit_article(self):
         return int(2.5 * (self.__context_length - 1024))
 
+    @property
+    def model_name(self) -> str:
+        if self.__model_info:
+            return self.__model_info.name
+        raise Exception('No model selected')
+
+    def select_model(self, instance: OllamaInstance) -> OllamaModelParams:
+        model = None
+        try:
+            model = self.__context.model_configuration['knowledge_model_name']
+            model_info = instance.get_model(model)
+            self.__model_info = model_info
+        except KeyError:
+            self.__logger.warning("Knowledge model %s not available, falling back to default", model)
+            try:
+                model = self.__context.chat_configuration['model_name']
+            except KeyError as ke:
+                self.__logger.error("Default model not configured available")
+                raise ke
+            try:
+                model_info = instance.get_model(model)
+            except KeyError as ke:
+                self.__logger.error("Default model %s not available", model)
+                raise ke
+            self.__model_info = model_info
+
+        return model_info
+
     async def parse_query(self, query: str, previous_summary: Optional[SummaryKeywords] = None) -> SummaryKeywords:
         try:
             unsuccessful_keywords = previous_summary.q
             params = {'query': query, 'previous': unsuccessful_keywords}
             command_prompt = KNOWLEDGE_BASE_SUBSEQUENT_SUMMARY_PROMPT.format(**params)
             output = await self.__client.generate(
-                model=self.__model,
+                model=self.model_name,
                 system=KNOWLEDGE_BASE_SUBSEQUENT_SUMMARY_SYSTEM,
                 prompt=command_prompt,
                 think=None,
@@ -62,7 +91,7 @@ class KnowledgBaseHandler:
             )
         except AttributeError:
             output = await self.__client.generate(
-                model=self.__model,
+                model=self.model_name,
                 system=KNOWLEDGE_BASE_INITIAL_SUMMARY_PROMPT,
                 prompt=query,
                 think=None,
@@ -97,7 +126,7 @@ class KnowledgBaseHandler:
         params = {'query': query}
         formatted_system_prompt = KNOWLEDGE_BASE_FIND_PAGE_PROMPT.format(**params)
         output = await self.__client.generate(
-            model=self.__model,
+            model=self.model_name,
             system=formatted_system_prompt,
             prompt=prompt,
             think=None,
@@ -116,24 +145,6 @@ class KnowledgBaseHandler:
         # selected_articles = await self.check_articles(query, chosen_links)
         async for article in self.check_articles(query, chosen_links):
             yield article
-
-        # chosen_link = chosen_links[0]
-        # page_url = chosen_link['url']
-        #
-        # url = f"{self.__server_hostname}{page_url}"
-        # # response = await asyncio.to_thread(requests.get, url)
-        # # response.raise_for_status()
-        # #
-        # # data = response.text
-        # # soup = BeautifulSoup(data, "html.parser")
-        # # content = soup.select_one("#mw-content-text")
-        # # content_string = content.text
-        # content_string = await asyncio.to_thread(fetch_page_content, url)
-
-        # if selected_articles:
-        #     return selected_articles  # chosen_link, url, content_string
-        # else:
-        #     return None
 
     async def check_articles(self, query: str, articles: list[dict]) -> AsyncGenerator[dict, Any]:
         # summarys: list[dict] = list()
@@ -161,7 +172,7 @@ class KnowledgBaseHandler:
             params = {'query': query}
             system_prompt = KNOWLEDGE_BASE_CHECK_ARTICLE_PROMPT.format(**params)
             output = await self.__client.generate(
-                model=self.__model,
+                model=self.model_name,
                 system=system_prompt,
                 prompt=prompt,
                 think=None,
@@ -238,7 +249,7 @@ class KnowledgBaseHandler:
         formatted_prompt = KNOWLEDGE_BASE_SUMMARY_ARTICLE_PROMPT.format(**params)
 
         stream = await self.__client.generate(
-            model=self.__model,
+            model=self.model_name,
             system=formatted_prompt,
             think=None,
             prompt=prompt,
@@ -250,54 +261,15 @@ class KnowledgBaseHandler:
         async for value in stream:
             yield value
 
-    # async def check_summary(self, user_prompt: str, language: str, assistant_response: str, article: str):
-    #     article_truncated = article[:self._limit_article]
-    #
-    #     prompt = f"""
-    # <query>
-    # {user_prompt}
-    # </query>
-    #
-    # <reference>
-    # {article_truncated}
-    # </reference>
-    #
-    # <summary>
-    # {assistant_response}
-    # </summary>
-    #
-    # <instructions>
-    # Important: answer in **{language}**.
-    # Put the heading: # Verification
-    # Proceed to verify the summary element using the reference element as per system prompt.
-    # </instructions>
-    # """
-    #
-    #     # print(article_truncated)
-    #     # token_len = check_token_len(prompt + KNOWLEDGE_BASE_SYSTEM_USE_ARTICLE_PROMPT)
-    #     # print(f"Prompt len: {len(prompt)}, System prompt len: {len(KNOWLEDGE_BASE_SYSTEM_USE_ARTICLE_PROMPT)}, Total token len: {token_len}")
-    #     # if token_len > CONST_CONTEXT_LEN - 700:  # Reserve 700 token for model template (not exact)
-    #     #    raise Exception("Prompt too long")
-    #
-    #     params = {'language': language}
-    #     formatted_prompt = KNOWLEDGE_BASE_SYSTEM_USE_ARTICLE_PROMPT.format(**params)
-    #
-    #     stream = await self.__client.generate(
-    #         model=self.__model,
-    #         system=formatted_prompt,
-    #         think=None,
-    #         prompt=prompt,
-    #         stream=True,
-    #         max_len=self.__num_predict_response,
-    #         temperature=0.1,
-    #     )
-    #
-    #     async for value in stream:
-    #         yield value
-
     async def __process(self, instance: OllamaInstance, query: str) -> AsyncGenerator[Union[SummaryKeywords, KnowledgeBaseSearchResponse, GenerateResponse, MardownTextResponse], Any]:
         # Find model, update context_length
-        model_info = instance.get_model(self.__model)
+        try:
+            model_info = self.select_model(instance)
+        except KeyError as ke:
+            self.__logger.error("No model available for running the query: %s", ke)
+            return
+
+        # model_info = instance.get_model(self.__model)
         context_length = model_info.context_length or self.__context_length
         self.__context_length = context_length
 
@@ -369,23 +341,14 @@ class KnowledgBaseHandler:
         async for chunk in self.review_article(query, summary.l, reference_content):
             yield chunk
 
-        # # Fact check summary with article
-        # yield MardownTextResponse(text="\n\n")
-        # async for chunk in self.check_summary(query, summary.l, summary.s, reference_content):
-        #     yield chunk
-
     async def run_query(self, instance: OllamaInstance, query: str) -> AsyncGenerator[MardownTextResponse, Any]:
         async for chunk in self.__process(instance, query):
             if isinstance(chunk, SummaryKeywords):
-                # content = f'# Summary\n\nNotice: This **may be inaccurate** and will be double-checked further down.\n\n{chunk.s}\n\nNow looking for a reference on: **{chunk.t}**, searching using: {chunk.q}\n'
                 content = f'Looking for references on: **{chunk.t}**, searching using: {chunk.q}\n'
                 yield MardownTextResponse(text=content, complete_block=True)
             elif isinstance(chunk, KnowledgeBaseSearchResponse):
                 content = f'Reference: [{chunk.reference_title}]({chunk.reference_url})\n\n{chunk.summary}'
                 yield MardownTextResponse(text=content, complete_block=True)
-            # elif isinstance(chunk, GenerateResponse):
-            #     # Final pass with fact checking stream
-            #     yield MardownTextResponse(text=chunk.response)
             elif isinstance(chunk, MessageWrapper):
                 yield MardownTextResponse(text=chunk.message['content'])
             elif isinstance(chunk, MardownTextResponse):  # Passthrough for formatting
