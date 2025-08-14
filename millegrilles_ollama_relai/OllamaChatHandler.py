@@ -20,7 +20,7 @@ from millegrilles_messages.messages import Constantes as ConstantesMilleGrilles
 from millegrilles_messages.messages.EnveloppeCertificat import EnveloppeCertificat
 from millegrilles_messages.messages.MessagesModule import MessageWrapper
 from millegrilles_messages.Filehost import FilehostConnection
-from millegrilles_ollama_relai.Constantes import CHAT_TYPE_KNOWLEDGE, MODEL_TYPE_KNOWLEDGE
+from millegrilles_ollama_relai.Constantes import CHAT_TYPE_KNOWLEDGE, MODEL_TYPE_KNOWLEDGE, MODEL_TYPE_CHAT
 from millegrilles_ollama_relai.InstancesDao import OllamaChatResponseWrapper
 from millegrilles_ollama_relai.OllamaContext import OllamaContext
 from millegrilles_messages.chiffrage.Mgs4 import chiffrer_mgs4_bytes_secrete
@@ -69,11 +69,12 @@ class OllamaChatHandler:
         # Re-emit the message on the model's process Q
         chat_action = message.routage['action']
         content = message.parsed
+        default_model = self.__context.chat_configuration['model_name']
         if chat_action == CHAT_TYPE_KNOWLEDGE:
-            chat_model = self.__context.model_configuration.get(MODEL_TYPE_KNOWLEDGE) or content['model']
+            # chat_model = self.__context.model_configuration.get(MODEL_TYPE_KNOWLEDGE) or content.get('model') or default_model
+            chat_model = self.__context.model_configuration.get(MODEL_TYPE_KNOWLEDGE) or default_model
         else:
-            chat_model = content['model']
-        # chat_model = message.parsed['model']
+            chat_model = content.get('model') or self.__context.model_configuration.get(MODEL_TYPE_CHAT) or default_model
         model_id = model_name_to_id(chat_model)
 
         attachements = {'correlation_id': message.correlation_id, 'reply_to': message.reply_to}

@@ -9,4 +9,6 @@ REDIS_SESSIONS_DB = 2
 CHAT_TYPE_INTERACTIVE = 'chat'
 CHAT_TYPE_KNOWLEDGE = 'knowledge_query'
 
+# MODEL_TYPE_DEFAULT = 'default_model'
+MODEL_TYPE_CHAT = 'chat_model_name'
 MODEL_TYPE_KNOWLEDGE = 'knowledge_model_name'

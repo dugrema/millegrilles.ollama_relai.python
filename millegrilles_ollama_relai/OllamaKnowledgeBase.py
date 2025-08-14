@@ -12,6 +12,7 @@ from typing import AsyncGenerator, Any, Union, Optional
 from bs4 import BeautifulSoup
 from ollama import GenerateResponse
 
+from millegrilles_ollama_relai.Constantes import MODEL_TYPE_KNOWLEDGE
 from millegrilles_ollama_relai.InstancesDao import InstanceDao, MessageWrapper, OllamaModelParams
 from millegrilles_ollama_relai.OllamaContext import OllamaContext
 from millegrilles_ollama_relai.OllamaInstanceManager import OllamaInstance
@@ -56,7 +57,7 @@ class KnowledgBaseHandler:
     def select_model(self, instance: OllamaInstance) -> OllamaModelParams:
         model = None
         try:
-            model = self.__context.model_configuration['knowledge_model_name']
+            model = self.__context.model_configuration[MODEL_TYPE_KNOWLEDGE]
             model_info = instance.get_model(model)
             self.__model_info = model_info
         except KeyError:
