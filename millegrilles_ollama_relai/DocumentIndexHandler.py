@@ -946,7 +946,7 @@ async def format_text_prompt(language: str, context_len: int, completion_len: in
         loader = PyPDFLoader(tmp_file.name, mode="single", extraction_kwargs=extraction_kwargs)
         try:
             document_list = await asyncio.to_thread(loader.load)
-        except PdfStreamError as e:
+        except (AttributeError, PdfStreamError) as e:
             raise FatalSummaryException(e)
         content = document_list[0].page_content
 
