@@ -1,0 +1,9 @@
+torch==2.8.0
+tensorboard==2.20.0
+transformers==4.55.2
+datasets==4.0.0
+accelerate==1.10.0
+evaluate==0.4.5
+trl==0.21.0
+protobuf==6.32.0
+sentencepiece==0.2.1
