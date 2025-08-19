@@ -965,12 +965,23 @@ async def format_text_prompt(language: str, context_len: int, completion_len: in
     # Trim content
     system_prompt_len = len(encoding.encode(system_prompt))
     free_space = context_len - system_prompt_len - completion_len - token_padding
-    encoded_content = encoding.encode(content)
-    if len(encoded_content) > free_space:
+    try:
+        encoded_content = encoding.encode(content)
+        encoded_content_len = len(encoded_content)
+    except ValueError:
+        # Unable to encode, using estimate of 2.5 chars per token
+        encoded_content = None
+        encoded_content_len = int(math.floor(len(content) / 2.5))
+
+    if encoded_content_len > free_space:
         try:
             # Truncate tokens,
-            encoded_content = encoded_content[0:free_space]
-            content = encoding.decode(encoded_content)
+            if encoded_content:
+                encoded_content = encoded_content[0:free_space]
+                content = encoding.decode(encoded_content)
+            else:
+                free_chars = int(free_space * 2.5)
+                content = content[0:free_chars]
             LOGGER.info(f"Truncated document to {free_space} tokens ({len(content)} chars). Initial len:{len(system_prompt + command_prompt)}")
             # Prepare a new prompt with truncated output
             command_prompt = f"<Document>\n{content}\n</Document>"
