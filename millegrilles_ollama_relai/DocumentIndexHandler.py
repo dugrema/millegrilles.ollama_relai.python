@@ -988,7 +988,10 @@ async def format_text_prompt(language: str, context_len: int, completion_len: in
         except IndexError:
             LOGGER.debug(f"Document not truncated, len: {len(content)}/{context_len}")
     else:
-        LOGGER.debug(f"Document not truncated, {len(encoded_content)+system_prompt_len}/{context_len} tokens ({len(system_prompt + command_prompt)} chars)")
+        if encoded_content:
+            LOGGER.debug(f"Document not truncated, {len(encoded_content)+system_prompt_len}/{context_len} tokens ({len(system_prompt + command_prompt)} chars)")
+        else:
+            LOGGER.debug(f"Document not truncated, ({len(system_prompt + command_prompt)} chars)")
         # break
 
     tmp_file.seek(0)
