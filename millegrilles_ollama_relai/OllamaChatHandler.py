@@ -287,7 +287,13 @@ class OllamaChatHandler:
             self.__running_chats[chat_id] = stream_task
 
             try:
-                await stream_task
+                try:
+                    await stream_task
+                except (ValueError, IndexError, TypeError) as e:
+                    if len(output) > 0:
+                        self.__logger.warning("Error during chat, finishing received content: %s", e)
+                    else:
+                        raise e  # Nothing output yet, just abort
             except* asyncio.CancelledError as e:
                 # Response interrupted by user, save
                 if self.__context.stopping is True:
