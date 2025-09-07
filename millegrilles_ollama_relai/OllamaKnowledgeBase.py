@@ -146,10 +146,7 @@ class KnowledgBaseHandler:
 
         # selected_articles = await self.check_articles(query, chosen_links)
         async for article in self.check_articles(query, chosen_links):
-            try:
-                yield article
-            except openai.BadRequestError:
-                self.__logger.exception("Error processing article, skipping")
+            yield article
 
     async def check_articles(self, query: str, articles: list[dict]) -> AsyncGenerator[dict, Any]:
         # summarys: list[dict] = list()
@@ -176,15 +173,19 @@ class KnowledgBaseHandler:
 
             params = {'query': query}
             system_prompt = KNOWLEDGE_BASE_CHECK_ARTICLE_PROMPT.format(**params)
-            output = await self.__client.generate(
-                model=self.model_name,
-                system=system_prompt,
-                prompt=prompt,
-                think=None,
-                response_format=MatchResult,
-                max_len=self.__num_predict_summary,
-                temperature=CONST_TEMPERATURE,
-            )
+            try:
+                output = await self.__client.generate(
+                    model=self.model_name,
+                    system=system_prompt,
+                    prompt=prompt,
+                    think=None,
+                    response_format=MatchResult,
+                    max_len=self.__num_predict_summary,
+                    temperature=CONST_TEMPERATURE,
+                )
+            except openai.BadRequestError:
+                self.__logger.exception("Error processing article, skipping")
+                continue
 
             content = cleanup_json_output(output.message['content'])
             result_value = MatchResult.model_validate_json(content)
