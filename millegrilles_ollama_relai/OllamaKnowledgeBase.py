@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 
+import openai
 import requests
 import urllib.parse
 
@@ -145,7 +146,10 @@ class KnowledgBaseHandler:
 
         # selected_articles = await self.check_articles(query, chosen_links)
         async for article in self.check_articles(query, chosen_links):
-            yield article
+            try:
+                yield article
+            except openai.BadRequestError:
+                self.__logger.exception("Error processing article, skipping")
 
     async def check_articles(self, query: str, articles: list[dict]) -> AsyncGenerator[dict, Any]:
         # summarys: list[dict] = list()
