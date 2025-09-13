@@ -3,6 +3,7 @@ import json
 import logging
 
 import openai
+import pydantic
 import requests
 import urllib.parse
 
@@ -77,9 +78,9 @@ class KnowledgBaseHandler:
 
         return model_info
 
-    async def parse_query(self, query: str, previous_summary: Optional[SummaryKeywords] = None) -> SummaryKeywords:
-        try:
-            unsuccessful_keywords = previous_summary.q
+    async def parse_query(self, query: str, previous_summary: list[SummaryKeywords]) -> SummaryKeywords:
+        unsuccessful_keywords = '\n'.join([s.t for s in previous_summary]) if len(previous_summary) > 0 else None
+        if unsuccessful_keywords:
             params = {'query': query, 'previous': unsuccessful_keywords}
             command_prompt = KNOWLEDGE_BASE_SUBSEQUENT_SUMMARY_PROMPT.format(**params)
             output = await self.__client.generate(
@@ -91,7 +92,7 @@ class KnowledgBaseHandler:
                 max_len=self.__num_predict_summary,
                 temperature=CONST_TEMPERATURE_SEARCH,
             )
-        except AttributeError:
+        else:
             output = await self.__client.generate(
                 model=self.model_name,
                 system=KNOWLEDGE_BASE_INITIAL_SUMMARY_PROMPT,
@@ -103,7 +104,12 @@ class KnowledgBaseHandler:
             )
 
         # content = content.replace('```json', '').replace('```', '').strip()
-        content = cleanup_json_output(output.message['content'])
+        try:
+            content = cleanup_json_output(output.message['content'])
+        except IndexError as e:
+            self.__logger.error("No query information received: {}", output.message['content'])
+            raise e
+
         response = SummaryKeywords.model_validate_json(content)
         return response
 
@@ -138,11 +144,21 @@ class KnowledgBaseHandler:
         )
 
         # Fetch the selected link by linkId
-        content = cleanup_json_output(output.message['content'])
-        response_dict = LinkIdPicker.model_validate_json(content)
-        link_ids = response_dict.link_ids
-        chosen_links = [l for l in search_results if l['linkId'] in link_ids]
-        self.__logger.debug("Chosen links: %s", json.dumps(chosen_links, indent=2))
+        try:
+            content = cleanup_json_output(output.message['content'])
+            if content == '':
+                return  # Nothing produced
+        except IndexError:
+            return  # Nothing produced
+
+        try:
+            response_dict = LinkIdPicker.model_validate_json(content)
+            link_ids = response_dict.link_ids
+            chosen_links = [l for l in search_results if l['linkId'] in link_ids]
+            self.__logger.debug("Chosen links: %s", json.dumps(chosen_links, indent=2))
+        except pydantic.ValidationError:
+            self.__logger.warning("LinkIdPicker.model_validate_json: Invalid response format: {}", content)
+            return
 
         # selected_articles = await self.check_articles(query, chosen_links)
         async for article in self.check_articles(query, chosen_links):
@@ -280,32 +296,31 @@ class KnowledgBaseHandler:
         context_length = model_info.context_length or self.__context_length
         self.__context_length = context_length
 
+        previous_summary: list[SummaryKeywords] = list()
+
         # Extract information from the user query
-        summary = await self.parse_query(query)
-        yield summary
+        try:
+            summary = await self.parse_query(query, previous_summary)
+        except IndexError:
+            return  # No more search patterns to try
 
         # Perform search
-        if summary.q is None:
+        if summary.t is None:
             return  # Done
 
         reference_url = summary.url
-        previous_summary: Optional[SummaryKeywords] = None
 
         if not reference_url:
             reference_content_list = list()
-            for i in range(0, 3):
+            for i in range(0, 4):
                 # Support iterative refining of keywords
-                if previous_summary:
+                if len(previous_summary) > 0:
                     summary = await self.parse_query(query, previous_summary)
-                    if previous_summary.q == summary.q:
-                        yield MardownTextResponse(text='**No match** found for this topic.')
-                        return
-                    else:
-                        yield summary  # New search keywords
+                    yield summary  # New search keywords
 
-                previous_summary = summary
+                previous_summary.append(summary)
 
-                search_url, links = await self.search_topic(summary.q)
+                search_url, links = await self.search_topic(summary.t)
                 # Find matching page
                 # chosen_link, reference_url, reference_content = await self.search_query(summary.q, query, links)
 
@@ -351,7 +366,7 @@ class KnowledgBaseHandler:
     async def run_query(self, instance: OllamaInstance, query: str) -> AsyncGenerator[MardownTextResponse, Any]:
         async for chunk in self.__process(instance, query):
             if isinstance(chunk, SummaryKeywords):
-                content = f'Looking for references on: **{chunk.t}**, searching using: {chunk.q}\n'
+                content = f'Looking for references on: **{chunk.t}**\n'
                 yield MardownTextResponse(text=content, complete_block=True)
             elif isinstance(chunk, KnowledgeBaseSearchResponse):
                 content = f'Reference: [{chunk.reference_title}]({chunk.reference_url})\n\n{chunk.summary}'

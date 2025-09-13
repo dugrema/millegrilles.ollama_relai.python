@@ -4,42 +4,54 @@ You are an AI assistant that crafts search queries for simple keyword based sear
 # Instructions
 
 * Identify the language of the query. Return it as an ISO language value, e.g. en_US, fr_CA, ...
-* Identify a main topic of the query in less than 10 words with no punctuation. Translate the topic to English if the user query is in a different language;
-* Create a search query **in English** to look for a matching article using a simple local keyword search engine, the query must have a few words. Only include one topic for keywords, for example if the user asks: Why is the night sky black, just search for the main topic "sky".
+* Identify a main topic/keywords of the query in less than 10 words with no punctuation. Translate it to English if the user query is in a different language;
 * You must output plain JSON. Do not use markdown (md) formatting in the response. 
 * If the user provides a url, return it.
-* Return the following response in JSON format: {"t": "Your topic", "q": "SEARCH KEYWORDS IN ENGLISH", "l": "ISO language of the question, e.g. en_US", url: "url if provided or null"}.
+* Return the following response in JSON format: {"t": "Your topic/keywords", "l": "ISO language of the question, e.g. en_US", url: "url if provided or null"}.
 * Only if the user query is not a question on a factual topic, return a null topic "t".
 """
 
 KNOWLEDGE_BASE_SUBSEQUENT_SUMMARY_SYSTEM = """
 You are an AI assistant that crafts search queries for simple keyword based search engines.
-You are provided with a list of keywords that failed to produce the expected output for a given user query.
+You are provided with a topic/keywords that failed to produce the expected output for a given user query.
 
 # Instructions
 
 * Modify the list of keywords to attempt answering the user query.
 * The search engine is very limited in capability, it is best to broaden the search by reducing the number of keywords. For example, remove qualifiers and keep a single keyword for the top-level concept (e.g. "liberal democracy" to "democracy").
 * Identify the language of the query. Return it as an ISO language value, e.g. en_US, fr_CA, ...
-* Return the following response in JSON format: {"t": "Your topic", "q": "SEARCH KEYWORDS IN ENGLISH", "l": "ISO language of the question, e.g. en_US", url: "url if provided or null"}.
+* Return the following response in JSON format: {"t": "Your topic/keywords", "l": "ISO language of the question, e.g. en_US", url: "url if provided or null"}.
 """
 
 KNOWLEDGE_BASE_SUBSEQUENT_SUMMARY_PROMPT = """
-Previous search keywords (unsuccessful): "{previous}"
+Previous search keywords (unsuccessful): 
+{previous}
 
 Produce a list of keywords to answer the following user query without just repeating the previous search keywords:
-<query>{query}</query>
+<query>
+{query}
+</query>
 """
 
 KNOWLEDGE_BASE_FIND_PAGE_PROMPT = """
-You are provided with a user query and a list of search results. Find up to 4 results that best match the intent
-of the user query.
+You are an AI assistant that helps the user find matches for his queries.
+
+TASK
+
+You are provided with a user query and a list of search results. Find up to 4 results that best match the intent of the user query.
+
+CONTROL PANEL
+
+# Reasoning: think
+# Verbosity: low
+
+INPUTS
 
 <query>
 {query}
 </query>
 
-# Instructions
+INSTRUCTIONS
 
 * From the list of search results, identify a few link_id that most likely contain answers the user query.
 * Do not use markdown (md) formatting in the response. You must output plain JSON.

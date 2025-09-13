@@ -10,9 +10,7 @@ class SummaryText(BaseModel):
 
 
 class SummaryKeywords(BaseModel):
-    # s: str
     t: Optional[str]
-    q: Optional[str]
     l: str
     url: Optional[str]
 
