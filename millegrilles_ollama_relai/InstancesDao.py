@@ -87,7 +87,11 @@ class OpenaiChatCompletionStreamWrapper(MessageWrapper):
     def __init__(self, value: ChatCompletionChunk):
         self.__value = value
         choice = value.choices[0]
-        self.message = MessageContent(role='assistant', content=choice.delta.content, thinking=None, tool_calls=None)
+        try:
+            reasoning_content = choice.delta.model_extra['reasoning_content']
+        except (TypeError, KeyError):
+            reasoning_content = None
+        self.message = MessageContent(role='assistant', content=choice.delta.content, thinking=reasoning_content, tool_calls=None)
         self.done = choice.finish_reason is not None
 
     def to_dict(self):

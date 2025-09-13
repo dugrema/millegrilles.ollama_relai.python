@@ -30,6 +30,7 @@ from millegrilles_ollama_relai.OllamaKnowledgeBase import KnowledgBaseHandler
 from millegrilles_ollama_relai.OllamaTools import OllamaToolHandler
 from millegrilles_ollama_relai.Structs import MardownTextResponse
 from millegrilles_ollama_relai.Util import conditional_convert_to_png
+from millegrilles_ollama_relai.prompts.chat_gptoss_system_prompts import CHAT_GPTOSS_PROMPT_KNOWLEDGE_BASE
 from millegrilles_ollama_relai.prompts.chat_system_prompts import CHAT_PROMPT_KNOWLEDGE_BASE, USER_INFORMATION_LAYOUT
 
 MAX_TOOL_ITERATIONS = 4
@@ -514,9 +515,9 @@ class OllamaChatHandler:
             except (TypeError, AttributeError, IndexError, KeyError):
                 tools = None
             try:
-                think = 'thinking' in model_info.capabilities or False
+                think = 'thinking' in model_info.capabilities or None
             except  (TypeError, AttributeError, IndexError, KeyError):
-                think = False
+                think = None
 
         async with instance.semaphore:
             # Loop to allow tool calls by the model.
@@ -532,7 +533,7 @@ class OllamaChatHandler:
                     messages=messages,
                     tools=tools,
                     stream=True,
-                    max_len=4096,
+                    # max_len=4096,
                     think=think,
                 )
 
@@ -615,7 +616,8 @@ class OllamaChatHandler:
             'timezone': timezone.zone,
         }
         user_information = USER_INFORMATION_LAYOUT.format(**params)
-        system_prompt = CHAT_PROMPT_KNOWLEDGE_BASE.format(**{"user_information": user_information})
+        # system_prompt = CHAT_PROMPT_KNOWLEDGE_BASE.format(**{"user_information": user_information})
+        system_prompt = CHAT_GPTOSS_PROMPT_KNOWLEDGE_BASE.format(**{"user_information": user_information})
 
         return system_prompt
 
