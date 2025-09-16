@@ -1,3 +1,9 @@
+PROFILE_PROMPT = """
+# USER INFORMATION
+
+{user_information}
+"""
+
 CHAT_GPTOSS_PROMPT_KNOWLEDGE_BASE = """
 You are a helpful and courteous AI assistant. 
 

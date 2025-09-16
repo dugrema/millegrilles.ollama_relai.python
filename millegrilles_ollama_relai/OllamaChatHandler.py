@@ -30,7 +30,8 @@ from millegrilles_ollama_relai.OllamaKnowledgeBase import KnowledgBaseHandler
 from millegrilles_ollama_relai.OllamaTools import OllamaToolHandler
 from millegrilles_ollama_relai.Structs import MardownTextResponse
 from millegrilles_ollama_relai.Util import conditional_convert_to_png
-from millegrilles_ollama_relai.prompts.chat_gptoss_system_prompts import CHAT_GPTOSS_PROMPT_KNOWLEDGE_BASE
+from millegrilles_ollama_relai.prompts.chat_gptoss_system_prompts import CHAT_GPTOSS_PROMPT_KNOWLEDGE_BASE, \
+    PROFILE_PROMPT
 from millegrilles_ollama_relai.prompts.chat_system_prompts import CHAT_PROMPT_KNOWLEDGE_BASE, USER_INFORMATION_LAYOUT
 
 MAX_TOOL_ITERATIONS = 4
@@ -192,10 +193,10 @@ class OllamaChatHandler:
                                      correlation_id=correlation_id, reply_to=reply_to)
                 return False
 
-            # system_prompt = self.__prepare_message_prompt(username, 'en_CA', 'America/Toronto')
+            system_prompt = self.__prepare_message_prompt(username, 'en_CA', 'America/Toronto')
 
             chat_messages = [
-                # {'role': 'system', 'content': system_prompt}
+                {'role': 'system', 'content': system_prompt}
             ]
 
             chat_message = await asyncio.to_thread(dechiffrer_bytes_secrete, decryption_key, content['encrypted_content'])
@@ -616,8 +617,7 @@ class OllamaChatHandler:
             'timezone': timezone.zone,
         }
         user_information = USER_INFORMATION_LAYOUT.format(**params)
-        # system_prompt = CHAT_PROMPT_KNOWLEDGE_BASE.format(**{"user_information": user_information})
-        system_prompt = CHAT_GPTOSS_PROMPT_KNOWLEDGE_BASE.format(**{"user_information": user_information})
+        system_prompt = PROFILE_PROMPT.format(**{"user_information": user_information})
 
         return system_prompt
 
