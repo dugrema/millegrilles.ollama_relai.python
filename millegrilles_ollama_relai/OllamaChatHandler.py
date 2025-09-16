@@ -192,10 +192,10 @@ class OllamaChatHandler:
                                      correlation_id=correlation_id, reply_to=reply_to)
                 return False
 
-            system_prompt = self.__prepare_message_prompt(username, 'en_CA', 'America/Toronto')
+            # system_prompt = self.__prepare_message_prompt(username, 'en_CA', 'America/Toronto')
 
             chat_messages = [
-                {'role': 'system', 'content': system_prompt}
+                # {'role': 'system', 'content': system_prompt}
             ]
 
             chat_message = await asyncio.to_thread(dechiffrer_bytes_secrete, decryption_key, content['encrypted_content'])

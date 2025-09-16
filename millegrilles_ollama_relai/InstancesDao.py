@@ -84,13 +84,18 @@ class OpenaiChatResponseWrapper(MessageWrapper):
 
 class OpenaiChatCompletionStreamWrapper(MessageWrapper):
 
-    def __init__(self, value: ChatCompletionChunk):
+    def __init__(self, value: Optional[ChatCompletionChunk]):
         self.__value = value
+        if value is None:
+            self.message = MessageContent(role='assistant', content='', thinking=None, tool_calls=None)
+            self.done = True
+            return
+
         try:
             choice = value.choices[0]
         except IndexError:
             self.message = MessageContent(role='assistant', content='', thinking=None, tool_calls=None)
-            self.done = True
+            self.done = False
             return
 
         try:
@@ -496,7 +501,7 @@ class OpenAiInstanceDao(InstanceDao):
         )
 
     async def chat(self, model: str, messages: Optional[list] = None, stream=False, think=False,
-                   tools: Optional[list] = None, response_format: Optional[BaseModel] = None, max_len=1024, temperature=0.1):
+                   tools: Optional[list] = None, response_format: Optional[BaseModel] = None, max_len=None, temperature=None):
 
         if messages:
             mapped_messages = self.__map_messages(messages)
@@ -538,3 +543,4 @@ class OpenAiInstanceDao(InstanceDao):
     async def __wrap_stream(self, response: AsyncIterator):
         async for chunk in response:
             yield OpenaiChatCompletionStreamWrapper(chunk)
+        yield OpenaiChatCompletionStreamWrapper(None)
