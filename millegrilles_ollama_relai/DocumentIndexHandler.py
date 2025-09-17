@@ -775,15 +775,15 @@ async def summarize_file(client: InstanceDao, job: FileInformation, model: str,
     if job_type == CONST_JOB_SUMMARY_TEXT and tmp_file:
         tmp_file.seek(0)
         effective_context = context_len
-        # if vision and image_tmp_file:
-        #     # Also add image, can help with PDFs that have no text content
-        #     image_tmp_file.seek(0)
-        #     image_content = await asyncio.to_thread(image_tmp_file.read)
-        #     image_tmp_file.seek(0)
-        #     images = [image_content]
-        #     effective_context -= 512  # Give enough space for the image
-        # else:
-        #     images = None
+        if vision and image_tmp_file:
+            # Also add image, can help with PDFs that have no text content
+            image_tmp_file.seek(0)
+            image_content = await asyncio.to_thread(image_tmp_file.read)
+            image_tmp_file.seek(0)
+            images = [image_content]
+            effective_context -= 512  # Give enough space for the image
+        else:
+            images = None
 
         for i in range(0, 3):
             tmp_file.seek(0)
@@ -798,7 +798,7 @@ async def summarize_file(client: InstanceDao, job: FileInformation, model: str,
                     response_format=format,
                     max_len=CONST_SUMMARY_NUM_PREDICT,
                     temperature=temperature,
-                    # images=images,
+                    images=images,
                     # options={"temperature": temperature, "num_ctx": context_len, "num_predict": CONST_SUMMARY_NUM_PREDICT}
                 )
                 break
