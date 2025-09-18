@@ -103,7 +103,6 @@ class KnowledgBaseHandler:
                 temperature=CONST_TEMPERATURE,
             )
 
-        # content = content.replace('```json', '').replace('```', '').strip()
         try:
             content = cleanup_json_output(output.message['content'])
         except IndexError as e:
@@ -316,24 +315,21 @@ class KnowledgBaseHandler:
                 # Support iterative refining of keywords
                 if len(previous_summary) > 0:
                     summary = await self.parse_query(query, previous_summary)
-                    yield summary  # New search keywords
 
                 previous_summary.append(summary)
+                yield summary  # New search keywords
 
                 search_url, links = await self.search_topic(summary.t)
-                # Find matching page
-                # chosen_link, reference_url, reference_content = await self.search_query(summary.q, query, links)
 
-                selected_articles = list()
-                # selected_articles = await self.search_query(summary.q, query, links)
+                # selected_articles = list()
+
+                # Find matching page
                 async for article in self.search_query(query, links):
-                    selected_articles.append(article)
+                    # selected_articles.append(article)
                     reference_content_list.append('\n'.join([article['title'], article['summary']]))
                     yield KnowledgeBaseSearchResponse(search_url=search_url, reference_title=article['title'], reference_url=article['url'], summary=article['summary'])
 
                 if len(reference_content_list) == 0:
-                    # yield MardownTextResponse(text='**No match** found for this topic.')
-                    # return  # Done
                     continue  # Retry
                 elif len(reference_content_list) == 1:
                     # Only one article. The summary is the answer.

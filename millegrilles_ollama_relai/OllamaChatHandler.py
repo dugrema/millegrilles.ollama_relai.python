@@ -31,7 +31,7 @@ from millegrilles_ollama_relai.OllamaTools import OllamaToolHandler
 from millegrilles_ollama_relai.Structs import MardownTextResponse
 from millegrilles_ollama_relai.Util import conditional_convert_to_png
 from millegrilles_ollama_relai.prompts.chat_gptoss_system_prompts import CHAT_GPTOSS_PROMPT_KNOWLEDGE_BASE, \
-    PROFILE_PROMPT
+    PROFILE_PROMPT, WIKIPEDIA_LINKS
 from millegrilles_ollama_relai.prompts.chat_system_prompts import CHAT_PROMPT_KNOWLEDGE_BASE, USER_INFORMATION_LAYOUT
 
 MAX_TOOL_ITERATIONS = 4
@@ -610,14 +610,25 @@ class OllamaChatHandler:
 
     def __prepare_message_prompt(self, username: str, language: str, timezone: str):
         timezone = pytz.timezone(timezone)
+
+        prompt_dict = {'user_information': '', 'links': ''}
+
         params = {
             'username': username,
             'language': language,
             'current_date': datetime.datetime.now(tz=timezone),
             'timezone': timezone.zone,
         }
-        user_information = USER_INFORMATION_LAYOUT.format(**params)
-        system_prompt = PROFILE_PROMPT.format(**{"user_information": user_information})
+        prompt_dict['user_information'] = USER_INFORMATION_LAYOUT.format(**params)
+
+        try:
+            urls_configuration = self.__context.url_configuration
+            kiwix_en = urls_configuration['urls']['kiwixWikipediaEnSearch']
+            prompt_dict['links'] = WIKIPEDIA_LINKS  # TODO Hard-coded
+        except (TypeError, KeyError):
+            pass
+
+        system_prompt = PROFILE_PROMPT.format(**prompt_dict)
 
         return system_prompt
 

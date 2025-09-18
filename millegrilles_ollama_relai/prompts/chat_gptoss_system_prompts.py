@@ -2,6 +2,17 @@ PROFILE_PROMPT = """
 # USER INFORMATION
 
 {user_information}
+
+# LINKS
+{links}
+* Do not suggest or provide any external links. 
+* Always encode links using markdown: [Link Description](https://libs.millegrilles.com/link).
+"""
+
+WIKIPEDIA_LINKS = """
+* Wikipedia (internal): 
+** an English version is available at: https://libs.millegrilles.com/kiwix/content/wikipedia_en_all_maxi_2025-08/. You may produce links like: https://libs.millegrilles.com/kiwix/content/wikipedia_en_all_maxi_2025-08/Magic_(illusion).
+** a French version is available at: https://libs.millegrilles.com/kiwix/content/wikipedia_fr_all_maxi_2025-06/. You may produce links like: https://libs.millegrilles.com/kiwix/content/wikipedia_fr_all_maxi_2025-06/Antiquité.
 """
 
 CHAT_GPTOSS_PROMPT_KNOWLEDGE_BASE = """
