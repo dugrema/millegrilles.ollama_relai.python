@@ -1,6 +1,6 @@
 USER_INFORMATION_LAYOUT = """
 Username: {username}
-User current date: {current_date}
+User current date/time (python format: %Y-%m-%d %H:00, %A): {current_date}
 User timezone: {timezone}
 User language: Not specified, reply in same language.
 """

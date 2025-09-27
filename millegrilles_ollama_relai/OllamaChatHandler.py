@@ -35,6 +35,7 @@ from millegrilles_ollama_relai.prompts.chat_gptoss_system_prompts import CHAT_GP
 from millegrilles_ollama_relai.prompts.chat_system_prompts import CHAT_PROMPT_KNOWLEDGE_BASE, USER_INFORMATION_LAYOUT
 
 MAX_TOOL_ITERATIONS = 4
+CHAT_RESPONSE_INTERVAL = 500
 
 class OllamaChatHandler:
 
@@ -351,7 +352,7 @@ class OllamaChatHandler:
 
             await producer.command(signed_command, 'AiLanguage', 'chatExchange',
                                    exchange=ConstantesMilleGrilles.SECURITE_PROTEGE,
-                                   attachments=attachements_echange, noformat=True, timeout=2)
+                                   attachments=attachements_echange, noformat=True, timeout=5)
 
             # Confirm to streaming client that message is complete
             chunk = {
@@ -379,7 +380,7 @@ class OllamaChatHandler:
     async def stream_chat_response(self, chat_id: str, output: dict, enveloppe: EnveloppeCertificat, correlation_id: str,
                                    reply_to: str, chat_stream: AsyncGenerator[OllamaChatResponseWrapper, Any]):
         producer = await self.__context.get_producer()
-        emit_interval = datetime.timedelta(milliseconds=750)
+        emit_interval = datetime.timedelta(milliseconds=CHAT_RESPONSE_INTERVAL)
         next_emit = datetime.datetime.now() + emit_interval
         think = ''
         buffer = ''
@@ -445,7 +446,7 @@ class OllamaChatHandler:
 
     async def stream_response(self, chat_id: str, output: dict, enveloppe: EnveloppeCertificat, correlation_id: str,
                               reply_to: str, chat_stream: AsyncGenerator[MardownTextResponse, Any]):
-        emit_interval = datetime.timedelta(milliseconds=750)
+        emit_interval = datetime.timedelta(milliseconds=CHAT_RESPONSE_INTERVAL)
         next_emit = datetime.datetime.now()
 
         think_response = []
@@ -613,10 +614,13 @@ class OllamaChatHandler:
 
         prompt_dict = {'user_information': '', 'links': ''}
 
+        date_now = datetime.datetime.now(tz=timezone)
+        date_str = f"{date_now.strftime("%Y-%m-%d, %A, hour (24h): %H")}"
+
         params = {
             'username': username,
             'language': language,
-            'current_date': datetime.datetime.now(tz=timezone),
+            'current_date': date_str,
             'timezone': timezone.zone,
         }
         prompt_dict['user_information'] = USER_INFORMATION_LAYOUT.format(**params)
