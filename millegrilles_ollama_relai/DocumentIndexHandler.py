@@ -46,7 +46,7 @@ CONST_ACTION_SUMMARY = 'leaseForSummary'
 CONST_JOB_RAG = 'rag'
 CONST_JOB_SUMMARY_TEXT = 'summaryText'
 CONST_JOB_SUMMARY_IMAGE = 'summaryImage'
-CONST_CHAR_MULTIPLIER = 4.5
+CONST_CHAR_MULTIPLIER = 2.5
 CONST_SUMMARY_NUM_PREDICT = 1024
 
 
@@ -799,13 +799,24 @@ async def summarize_file(client: InstanceDao, job: FileInformation, model: str,
                     max_len=CONST_SUMMARY_NUM_PREDICT,
                     temperature=temperature,
                     images=images,
-                    # options={"temperature": temperature, "num_ctx": context_len, "num_predict": CONST_SUMMARY_NUM_PREDICT}
                 )
                 break
             except openai.BadRequestError as bre:
                 LOGGER.warning("Error summarizing file tuuid:%s/fuuid:%s padding %s: %s", job.get('tuuid'), job.get('fuuid'), token_padding, bre)
-                # Likely that context was exceeded, retry
-                token_padding *= 2  # Double the padding
+                # Likely that context was exceeded (wrong tokenizer), retry by reducing availble context size
+                try:
+                    response_json = bre.response.json()
+                    error = response_json['error']
+                    n_ctx = error['n_ctx']
+                    n_prompt_tokens = error['n_prompt_tokens']
+                    # Calculate ratio, remove the padding (sys prompt) from the returned context
+                    ratio = n_prompt_tokens / (n_ctx - token_padding)
+                except (KeyError, ValueError, TypeError, AttributeError, json.JSONDecodeError):
+                    # Default to 33% excess
+                    ratio = 1.33
+
+                # Reduce the effective available context by ratio sent back through error response
+                effective_context = int(effective_context / ratio)
         else:
             raise ValueError(f"Unable to summarize file: tuuid:{job.get('tuuid')}/fuuid:{job.get('fuuid')}")
 
@@ -827,7 +838,6 @@ async def summarize_file(client: InstanceDao, job: FileInformation, model: str,
             max_len=CONST_SUMMARY_NUM_PREDICT,
             temperature=temperature,
             images=[image_content]
-            # options={"temperature": temperature, "num_ctx": context_len, "num_predict": CONST_SUMMARY_NUM_PREDICT},
         )
     else:
         raise ValueError(f"Unsupported job type: {job_type}")
