@@ -170,6 +170,8 @@ class OpenaiModelParams(ModelParams):
         self.__server_params = server_params
         self.__context_length = server_params.get('context_length') or 4096
         self.__capabilities = server_params.get('capabilities') or ['completion', 'vision']
+
+        self.__name = OpenaiModelParams.parse_name(model.id)
         self.__load_parameters()
 
     def __load_parameters(self):
@@ -180,9 +182,18 @@ class OpenaiModelParams(ModelParams):
         except (KeyError, AttributeError):
             pass  # No custom parameters
 
+    @staticmethod
+    def parse_name(model_id: str) -> str:
+        # Remove path, only keep file name.
+        model_name = model_id.split('/')[-1]
+        # Remove the .gguf extension when present.
+        model_name = model_name if not model_name.lower().endswith('.gguf') else model_name[:-5]
+
+        return model_name
+
     @property
     def name(self):
-        return self.__model.id
+        return self.__name
 
     @property
     def capabilities(self):
@@ -428,7 +439,9 @@ class OpenAiInstanceDao(InstanceDao):
 
         added_models = list()
         for model in models:
-            model_name = model.id
+            model_path = model.id
+            # Remove the full path, only keep the leaf part as model name, e.g. /path/to/model.gguf will be model
+            model_name = OpenaiModelParams.parse_name(model_path)
             model_id = model_name_to_id(model_name)
             try:
                 updated_models[model_id] = known_models[model_id]
