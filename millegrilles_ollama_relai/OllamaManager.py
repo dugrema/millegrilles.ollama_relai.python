@@ -43,9 +43,10 @@ class OllamaManager:
     async def setup(self):
         # Create staging folders
         #self.__context.dir_ollama_staging.mkdir(parents=True, exist_ok=True)
-        configuration = self.__context.configuration
-        dir_rag = pathlib.Path(configuration.dir_rag)
-        dir_rag.mkdir(parents=True, exist_ok=True)
+        # configuration = self.__context.configuration
+        # dir_rag = pathlib.Path(configuration.dir_rag)
+        # dir_rag.mkdir(parents=True, exist_ok=True)
+        pass
 
     async def __stop_thread(self):
         await self.__context.wait()

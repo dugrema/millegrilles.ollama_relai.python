@@ -52,7 +52,7 @@ User language: {language}
 
 # Example answers:
 
-{"title": "An invoice from company ABC", "summary": "This is an invoice of company ABC for Person D to the amount of 34.76$ due on 2026-01-01. The invoice details items: - 2 pencils, - 4 erasers, - 1 blackboard. The tax amount in 4.12$.", "labels": ["invoice","school suppy","due in January","2026"]}
-{"title": "Un paysage automnal", "summary": "Un paysage automnal ensoleillé montrant les pentes d'une montage avec des arbres au feuillage colorés.", "labels": ["photo","automne","jour","soleil","arbres"]}
+{{"title": "An invoice from company ABC", "summary": "This is an invoice of company ABC for Person D to the amount of 34.76$ due on 2026-01-01. The invoice details items: - 2 pencils, - 4 erasers, - 1 blackboard. The tax amount in 4.12$.", "labels": ["invoice","school suppy","due in January","2026"]}}
+{{"title": "Un paysage automnal", "summary": "Un paysage automnal ensoleillé montrant les pentes d'une montage avec des arbres au feuillage colorés.", "labels": ["photo","automne","jour","soleil","arbres"]}}
 
 """

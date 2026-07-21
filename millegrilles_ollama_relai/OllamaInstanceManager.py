@@ -537,7 +537,7 @@ class OllamaInstanceManager:
             self.__logger.debug("Connection to redis OK")
         except RedisConnectionError:
             self.__redis_client = None
-            self.__logger.error("Redis connection error, closing")
+            self.__logger.exception("Redis connection error, closing")
 
 
 async def create_instance_channel(context: OllamaContext,

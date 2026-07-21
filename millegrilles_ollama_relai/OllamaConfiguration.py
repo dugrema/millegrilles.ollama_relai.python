@@ -48,7 +48,7 @@ class OllamaConfiguration(MilleGrillesBusConfiguration):
     def __init__(self):
         super().__init__()
         self.dir_staging = '/var/opt/millegrilles/staging'
-        self.dir_rag = '/var/opt/millegrilles/rag'
+        # self.dir_rag = '/var/opt/millegrilles/rag'
         self.ollama_url = OllamaConstants.DEFAULT_OLLAMA_URL
         self.rag_active = False
         self.summary_active = False
@@ -57,7 +57,7 @@ class OllamaConfiguration(MilleGrillesBusConfiguration):
         super().parse_config()
 
         self.dir_staging = environ.get(Constantes.ENV_DIR_STAGING) or self.dir_staging
-        self.dir_rag = environ.get(OllamaConstants.ENV_DIR_AI_RAG) or self.dir_rag
+        # self.dir_rag = environ.get(OllamaConstants.ENV_DIR_AI_RAG) or self.dir_rag
         self.ollama_url = environ.get(OllamaConstants.ENV_OLLAMA_URL) or self.ollama_url
 
     def __set_args(self, args: argparse.Namespace):
