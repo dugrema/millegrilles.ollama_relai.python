@@ -27,9 +27,10 @@ Detect the type of document according to the content that was provided.
   
 # Example answers:
 
-{"summary": "This is an invoice of company ABC for Person D to the amount of 34.76$ due on 2026-01-01. The invoice details items: - 2 pencils, - 4 erasers, - 1 blackboard. The tax amount in 4.12$.", "tags": ["invoice","school suppy","due in January","2026"]}
-{"summary": "Un paysage automnal ensoleillé montrant les pentes d'une montage avec des arbres au feuillage colorés.", "tags": ["photo","automne","jour","soleil","arbres"]}
-{"summary": "Empty document.", "tags": ["empty"]}
+{{"summary": "This is an invoice of company ABC for Person D to the amount of 34.76$ due on 2026-01-01. The invoice details items: - 2 pencils, - 4 erasers, - 1 blackboard. The tax amount in 4.12$.", "tags": ["invoice","school suppy","due in January","2026"]}}
+{{"summary": "Un paysage automnal ensoleillé montrant les pentes d'une montage avec des arbres au feuillage colorés.", "tags": ["photo","automne","jour","soleil","arbres"]}}
+{{"summary": "Empty document.", "tags": ["empty"]}}
+{{"summary": "A breathtaking winter landscape captures a serene sunset over a vast, still lake nestled among snow-capped mountains. In the foreground, a steep, snow-covered slope is textured with shadows, showing small, frost-laden trees and bushes. The middle ground features a large lake that perfectly reflects the vibrant orange and yellow hues of the setting sun. The sun, positioned low on the horizon to the right, creates a brilliant golden path across the water's surface. In the background, a majestic range of rugged, snow-covered mountains stretches across the horizon under a clear sky that transitions from pale blue to warm orange. On the far right, a tall, dark evergreen tree with sparse needles frames the scene, its silhouette contrasting against the glowing sky. The overall atmosphere is peaceful and majestic, highlighting the beauty of a cold, alpine wilderness at dusk.", "tags": ["winter, "sunset", "lake", "mountains", "snow", "landscape", "nature", "golden hour", "reflection", "serene", "peaceful", "alpine", "scenery", "frost", "evergreen tree", "wilderness"]}}
 """
 
 PROMPT_INDEXING_SYSTEM_IMAGES = """
