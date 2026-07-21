@@ -180,7 +180,7 @@ class DocumentIndexHandler:
                 prompt=command_prompt,
                 system=system_prompt,
                 max_len=context_len,
-                temperature=0.0,
+                # temperature=0.0,
             )
 
         self.__logger.debug("Response: %s" % response.message['content'])
@@ -761,7 +761,7 @@ def index_pdf_file(vector_store: VectorStore, tuuid: str, filename: str, cuuids:
 
 async def summarize_file(client: InstanceDao, job: FileInformation, model: str,
                          tmp_file: tempfile.NamedTemporaryFile, image_tmp_file: tempfile.NamedTemporaryFile,
-                         context_len=4096, temperature=0.0, noformat=False, vision=False) -> SummaryText:
+                         context_len=4096, temperature=1.0, noformat=False, vision=False) -> SummaryText:
     job_type = job['job_type']
     language = job['language']
 

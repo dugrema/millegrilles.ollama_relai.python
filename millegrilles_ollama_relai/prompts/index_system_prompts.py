@@ -24,6 +24,12 @@ Detect the type of document according to the content that was provided.
 * If the document is a contract, summarize as: Contract between parties "PARTY A", "PARTY B" and "PARTY C" on "TOPIC OF CONTRACT". Also mention contractual dates when possible.
 * If the document is an article, include the *title* and then a *summary* using between 75 and 200 words. 
   For example: An article title. A new type of quantum state has been uncovered by scientists at a restaurant ...
+  
+# Example answers:
+
+{"summary": "This is an invoice of company ABC for Person D to the amount of 34.76$ due on 2026-01-01. The invoice details items: - 2 pencils, - 4 erasers, - 1 blackboard. The tax amount in 4.12$.", "tags": ["invoice","school suppy","due in January","2026"]}
+{"summary": "Un paysage automnal ensoleillé montrant les pentes d'une montage avec des arbres au feuillage colorés.", "tags": ["photo","automne","jour","soleil","arbres"]}
+{"summary": "Empty document.", "tags": ["empty"]}
 """
 
 PROMPT_INDEXING_SYSTEM_IMAGES = """
@@ -42,5 +48,10 @@ User language: {language}
 * Generate a detailed description in the summary field.
 * Provide a list of keywords / tags.
 * Use the user language provided to respond.
+
+# Example answers:
+
+{"title": "An invoice from company ABC", "summary": "This is an invoice of company ABC for Person D to the amount of 34.76$ due on 2026-01-01. The invoice details items: - 2 pencils, - 4 erasers, - 1 blackboard. The tax amount in 4.12$.", "labels": ["invoice","school suppy","due in January","2026"]}
+{"title": "Un paysage automnal", "summary": "Un paysage automnal ensoleillé montrant les pentes d'une montage avec des arbres au feuillage colorés.", "labels": ["photo","automne","jour","soleil","arbres"]}
 
 """
