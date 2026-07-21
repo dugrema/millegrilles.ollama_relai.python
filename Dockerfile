@@ -1,4 +1,4 @@
-FROM registry.millegrilles.com/millegrilles/messages_python:2025.4.108 as stage1
+FROM registry.millegrilles.com/millegrilles/messages_python:2026.3.5 AS stage1
 
 # Install dependencies
 RUN apt-get update && \
@@ -6,7 +6,7 @@ RUN apt-get update && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Stage 2
-FROM stage1 as stage2
+FROM stage1 AS stage2
 
 # Creer repertoire app, copier fichiers
 COPY ./requirements.txt $BUILD_FOLDER/requirements.txt

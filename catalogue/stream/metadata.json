@@ -1,0 +1,8 @@
+{
+  "name": "ollama_relai",
+  "version": "DEV",
+  "labels": {
+    "en": "LLM relay for MilleGrilles",
+    "fr": "Relai LLM pour MilleGrilles"
+  }
+}

@@ -1,0 +1,65 @@
+include:
+  - path: ../include/app_net.yml
+    project_directory: ..
+
+name: ${INSTANCE_NAME}
+
+services:
+  ollama_relai:
+    image: "replace_me"
+    command: ["-m", "millegrilles_ollama_relai", "--summary"]
+    x-millegrilles-certificat:
+      roles:
+        - ollama_relai
+      domaines:
+        - ollama_relai
+      exchanges:
+        - 3.protege
+        - 2.prive
+        - 1.public
+      split: true
+    environment:
+      - MQ_HOSTNAME=${MQ_HOSTNAME:-mq}
+      - MQ_PORT=${MQ_PORT:-5673}
+      - CERT_PATH=/run/secrets/cert.pem
+      - KEY_PATH=/run/secrets/key.pem
+      - CA_PATH=/run/secrets/millegrille.pem
+      - MG_REDIS_HOST=redis
+      - MG_REDIS_PORT=6379
+      - REDIS_PASSWORD_PATH=/run/secrets/passwd.redis.txt
+      - DIR_RAG=/var/opt/millegrilles/rag
+      - OLLAMA_URL=http://docker:11434
+    volumes:
+      - ${MILLEGRILLES_ROOT}/var/ollama/rag:/var/opt/millegrilles/rag
+    deploy:
+      resources:
+        limits:
+          memory: 500M
+      restart_policy:
+        condition: on-failure
+        delay: 20s
+        max_attempts: 1000
+    configs:
+      - source: ollama_relai
+        target: /run/secrets/cert.pem
+      - source: mgca
+        target: /run/secrets/millegrille.pem
+    secrets:
+      - source: ollama_relai
+        target: key.pem
+      - source: passwd_redis
+        target: passwd.redis.txt
+    networks:
+      - app_net
+
+configs:
+  ollama_relai:
+    file: ${MILLEGRILLES_ROOT}/secrets/ollama_relai.cert.pem
+  mgca:
+    file: ${MILLEGRILLES_ROOT}/etc/millegrille.pem
+
+secrets:
+  ollama_relai:
+    file: ${MILLEGRILLES_ROOT}/secrets/ollama_relai.key.pem
+  passwd_redis:
+    file: ${MILLEGRILLES_ROOT}/secrets/redis.txt
