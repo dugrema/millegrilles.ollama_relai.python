@@ -7,6 +7,7 @@ name: ${INSTANCE_NAME}
 services:
   ollama_relai:
     image: "replace_me"
+    user: "${CONTAINER_UID}:${CONTAINER_GID}"
     command: ["-m", "millegrilles_ollama_relai", "--summary"]
     x-millegrilles-certificat:
       roles:
