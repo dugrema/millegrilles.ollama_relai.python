@@ -1,4 +1,4 @@
-FROM registry.millegrilles.com/millegrilles/messages_python:2026.3.10 AS stage1
+FROM registry.millegrilles.com/millegrilles/messages_python:2026.4.12 AS stage1
 
 # Install dependencies
 RUN apt-get update && \
@@ -23,8 +23,7 @@ FROM stage2
 
 ARG VBUILD=2025.3.0
 
-ENV CERT_PATH=/run/secrets/cert.pem \
-    KEY_PATH=/run/secrets/key.pem \
+ENV KEY_PATH=/run/secrets/key_cert.pem \
     CA_PATH=/run/secrets/pki.millegrille.cert \
     MQ_HOSTNAME=mq \
     MQ_PORT=5673 \
