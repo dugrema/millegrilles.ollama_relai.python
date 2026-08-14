@@ -235,7 +235,7 @@ class InstanceDao:
         connection_url = self._url
         if connection_url.lower().startswith('https://'):
             # Use a millegrille certificate authentication
-            cert = (configuration.cert_path, configuration.key_path)
+            cert = (configuration.private_cert_path, configuration.key_path)
             params = {'verify':configuration.ca_path, 'cert':cert}
         else:
             params = {}

@@ -525,7 +525,7 @@ class OllamaInstanceManager:
                                      password=password,
                                      ssl=True,
                                      ssl_keyfile=configuration.key_path,
-                                     ssl_certfile=configuration.cert_path,
+                                     ssl_certfile=configuration.private_cert_path,
                                      ssl_ca_data=ca_pem)
 
                 await client.select(OllamaConstants.REDIS_SESSIONS_DB)
