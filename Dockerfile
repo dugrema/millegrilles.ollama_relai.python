@@ -1,4 +1,4 @@
-FROM registry.millegrilles.com/millegrilles/messages_python:2026.4.12 AS stage1
+FROM registry.millegrilles.com/millegrilles/messages_python:2026.4.13 AS stage1
 
 # Install dependencies
 RUN apt-get update && \
