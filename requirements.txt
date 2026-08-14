@@ -12,3 +12,6 @@ tiktoken==0.13.0
 bs4==0.0.2
 
 Pillow==12.3.0
+
+--extra-index-url https://libs.millegrilles.com/python/dist
+millegrilles-messages>=2026.4.13
