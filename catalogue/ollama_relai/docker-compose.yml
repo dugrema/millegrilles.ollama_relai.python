@@ -21,7 +21,6 @@ services:
       - MG_REDIS_PORT=6379
       - REDIS_PASSWORD_PATH=/run/secrets/passwd.redis.txt
       - DIR_RAG=/var/opt/millegrilles/rag
-      - OLLAMA_URL=http://docker:11434
     volumes:
       - ${MILLEGRILLES_ROOT}/var/ollama/rag:/var/opt/millegrilles/rag
     deploy:
