@@ -178,6 +178,34 @@ class OllamaManager:
         if tasks_dict is None:
             raise Exception("No task configuration to process")
 
+        for (task_name, params) in tasks_dict.items():
+            if get_property_int(params, 'active') != 1:
+                self.__logger.warning(f"Task {task_name} does not have the active flag set, ignoring")
+                continue
+
+            await self.initialize_task(task_name, params)
+
+    async def initialize_task(self, task_name: str, params: dict):
+        self.__logger.debug(f"Initializing ollama_relai task {task_name}")
+        task_type = get_property_text(params, 'type')
+        if task_type is None:
+            self.__logger.warning(f"Task {task_name} has no type, ignoring")
+            return
+
+        # Load the task type (python module with a Process class in it)
+        processor = load_processor(self.__context, task_type, task_name, params)
+        await processor.setup()
+
+        # Spawn this new long running task
+        asyncio.create_task(processor.run(), name=f"processor.task.{task_name}")
+
+
+def load_processor(context:OllamaContext, task_type: str, task_name: str, params: dict):
+    import importlib
+    module = importlib.import_module(f"millegrilles_ollama_relai.tasktype.{task_type}")
+    cls = getattr(module, 'Processor')
+    return cls(context, task_name, params)
+
 
 def get_property_text(properties: dict, key: str) -> Optional[str]:
     try:
