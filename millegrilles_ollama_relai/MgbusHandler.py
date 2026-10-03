@@ -90,9 +90,11 @@ class MgbusHandler:
             if domain == 'filecontroler' and action == 'filehostNewFuuid' and 'filecontroler' in roles:
                 # Create delayed task - we are listening to the filecontroler, need to give time for GrosFichiers to
                 # register the visit
-                asyncio.create_task(self.__manager.trigger_rag_indexing(delay=3))
+                #asyncio.create_task(self.__manager.trigger_rag_indexing(delay=3))
                 return None
-            elif domain == 'AiLanguage' and action == 'configurationUpdated' and 'AiLanguage' in domains_env:
+            # elif domain == 'AiLanguage' and action == 'configurationUpdated' and 'AiLanguage' in domains_env:
+            elif domain == 'CoreTopologie' and action == 'configurationFile' and message.parsed.get('filename') == 'ollama_relai':
+                self.__logger.info("Received configuration update trigger")
                 await self.__manager.trigger_reload_ai_configuration()
                 return None
 
@@ -107,10 +109,12 @@ class MgbusHandler:
                 models = self.__ollama_instances.get_models()
                 return {'ok': True, 'models': models}
             elif action == 'queryRag':
-                return await self.__manager.register_rag_query(message)
+                pass
+                # return await self.__manager.register_rag_query(message)
         elif message_type == 'commande':
             if action in ['chat', 'knowledge_query']:
-                return await self.__manager.register_chat(message)
+                pass
+                # return await self.__manager.register_chat(message)
 
         self.__logger.info("__on_volatile_message Ignoring unknown action %s", message.routing_key)
         return {'ok': False, 'code': 404, 'err': 'Unknown operation'}
@@ -145,9 +149,11 @@ class MgbusHandler:
             return None
 
         if action in ['chat', 'knowledge_query']:
-            return await self.__manager.process_chat(instance, message)
+            pass
+            # return await self.__manager.process_chat(instance, message)
         elif action == 'queryRag':
-            return await self.__manager.query_rag(instance, message)
+            pass
+            # return await self.__manager.query_rag(instance, message)
 
         self.__logger.info("__on_processing_message Ignoring unknown action %s", message.routing_key)
         return {'ok': False, 'code': 404, 'err': 'Unknown operation'}
@@ -166,7 +172,8 @@ class MgbusHandler:
         action = message.routage['action']
 
         if action == 'cancelChat':
-            return await self.__manager.cancel_chat(message)
+            pass
+            # return await self.__manager.cancel_chat(message)
 
         self.__logger.info("__on_processing_message Ignoring unknown action %s", message.routing_key)
         return {'ok': False, 'code': 404, 'err': 'Unknown operation'}
@@ -192,18 +199,20 @@ def create_volatile_q_channel(context: MilleGrillesBusContext,
     q_instance.add_routing_key(RoutingKey(
         Constantes.SECURITE_PRIVE, f'requete.{OllamaConstants.DOMAIN_OLLAMA_RELAI}.getModels'))
 
+    # q_instance.add_routing_key(RoutingKey(
+    #     Constantes.SECURITE_PRIVE, 'evenement.AiLanguage.configurationUpdated'))
     q_instance.add_routing_key(RoutingKey(
-        Constantes.SECURITE_PRIVE, 'evenement.AiLanguage.configurationUpdated'))
+        Constantes.SECURITE_PUBLIC, 'evenement.CoreTopologie.configurationFile'))
 
-    if context.configuration.rag_active or context.configuration.summary_active:  # RAG (document index)
-        q_instance.add_routing_key(RoutingKey(
-            Constantes.SECURITE_PUBLIC, 'evenement.filecontroler.filehostNewFuuid'))
+    # if context.configuration.rag_active or context.configuration.summary_active:  # RAG (document index)
+    #     q_instance.add_routing_key(RoutingKey(
+    #         Constantes.SECURITE_PUBLIC, 'evenement.filecontroler.filehostNewFuuid'))
 
-    if context.configuration.rag_active:  # RAG (document index)
-        q_instance.add_routing_key(RoutingKey(
-            Constantes.SECURITE_PROTEGE, f'commande.{OllamaConstants.DOMAIN_OLLAMA_RELAI}.indexDocuments'))
-        q_instance.add_routing_key(RoutingKey(
-            Constantes.SECURITE_PRIVE, f'requete.{OllamaConstants.DOMAIN_OLLAMA_RELAI}.queryRag'))
+    # if context.configuration.rag_active:  # RAG (document index)
+    #     q_instance.add_routing_key(RoutingKey(
+    #         Constantes.SECURITE_PROTEGE, f'commande.{OllamaConstants.DOMAIN_OLLAMA_RELAI}.indexDocuments'))
+    #     q_instance.add_routing_key(RoutingKey(
+    #         Constantes.SECURITE_PRIVE, f'requete.{OllamaConstants.DOMAIN_OLLAMA_RELAI}.queryRag'))
 
     q_channel.add_queue(q_instance)
     return q_channel
