@@ -59,3 +59,23 @@ class OllamaRelaiConfigurationFile(TypedDict):
     key_id: str
     last_modified: int
     list: list[OllamaRelaiConfigurationProperties]
+
+
+
+def get_property_text(properties: dict, key: str) -> Optional[str]:
+    try:
+        return properties[key]['text']
+    except KeyError:
+        return None
+
+def get_property_int(properties: dict, key: str) -> Optional[int]:
+    try:
+        return properties[key]['inumber']
+    except KeyError:
+        return None
+
+def get_property_float(properties: dict, key: str) -> Optional[float]:
+    try:
+        return properties[key]['fnumber']
+    except KeyError:
+        return None

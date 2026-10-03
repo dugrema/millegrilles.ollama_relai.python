@@ -12,7 +12,7 @@ from millegrilles_messages.Filehost import FilehostConnection
 from millegrilles_ollama_relai.OllamaContext import OllamaContext
 from millegrilles_ollama_relai.OllamaInstanceManager import OllamaInstanceManager
 from millegrilles_ollama_relai.Structs import OllamaRelaiConfigurationFile, OllamaRelaiConfigurationProperties, \
-    OllamaRelaiConfigurationPropertiesValue
+    OllamaRelaiConfigurationPropertiesValue, get_property_text, get_property_int
 
 
 class OllamaManager:
@@ -32,6 +32,7 @@ class OllamaManager:
         self.__current_configuration: Optional[OllamaRelaiConfigurationFile] = None     # Configuration as received
         self.__property_dict: Optional[dict] = None                                     # Parsed properties
         self.__tasks_dict: Optional[dict] = None                                        # Individual task properties
+        self.__task_runners: Optional[list] = None
 
     @property
     def context(self):
@@ -149,10 +150,13 @@ class OllamaManager:
         self.__logger.info("__ollama_watchdog_thread Stopping")
 
     async def __process_configuration_changes(self, configuration: OllamaRelaiConfigurationFile):
-        if self.__current_configuration is not None:
-            # TODO - process changes
-            self.__logger.warning("TODO - handle configuration changes, IGNORING for now")
-            return
+        runners = self.__task_runners
+        if  runners is not None:
+            # Stop all current tasks (will continue until done)
+            for runner in runners:
+                await runner.stop()  # Toggles a flag to stop processing when done
+
+        self.__task_runners = list()  # New list
 
         self.__current_configuration = configuration
 
@@ -198,6 +202,7 @@ class OllamaManager:
 
         # Spawn this new long running task
         asyncio.create_task(processor.run(), name=f"processor.task.{task_name}")
+        self.__task_runners.append(processor)
 
 
 def load_processor(context:OllamaContext, task_type: str, task_name: str, params: dict):
@@ -205,26 +210,6 @@ def load_processor(context:OllamaContext, task_type: str, task_name: str, params
     module = importlib.import_module(f"millegrilles_ollama_relai.tasktype.{task_type}")
     cls = getattr(module, 'Processor')
     return cls(context, task_name, params)
-
-
-def get_property_text(properties: dict, key: str) -> Optional[str]:
-    try:
-        return properties[key]['text']
-    except KeyError:
-        return None
-
-def get_property_int(properties: dict, key: str) -> Optional[int]:
-    try:
-        return properties[key]['inumber']
-    except KeyError:
-        return None
-
-def get_property_float(properties: dict, key: str) -> Optional[float]:
-    try:
-        return properties[key]['fnumber']
-    except KeyError:
-        return None
-
 
 def parse_configuration(configuration: OllamaRelaiConfigurationFile) -> tuple[dict[Any, Any], dict[Any, Any]]:
     property_dict = dict()
