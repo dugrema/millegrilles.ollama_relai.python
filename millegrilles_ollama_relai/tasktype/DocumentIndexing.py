@@ -241,90 +241,102 @@ class Processor:
 
         # Parse batch file and insert on queue per item
         leases = parsed['leases']
-        secret_keys: list = parsed['secret_keys']
 
         self.__logger.debug(f"Received batch of {len(leases)} files for {CONST_ACTION_SUMMARY} from filehost_id:{filehost_id}")
 
         for lease in leases:
-            metadata = lease.get('metadata')
-            version = lease.get('version')
-            cuuids = lease.get('cuuids')
-            fuuid: Optional[str] = None
-
-            cle_id = None
-            mimetype = lease.get('mimetype')
-            if version:
-                fuuid = version['fuuid']
-                cle_id = version.get('cle_id')
-                mimetype = mimetype or version.get('mimetype')
-
-            if metadata and not cle_id:
-                cle_id = cle_id or metadata.get('cle_id') or metadata.get('ref_hachage_bytes')
-            cle_id = cle_id or fuuid
-
-            try:
-                key = [k for k in secret_keys if k['cle_id'] == cle_id].pop()
-            except IndexError:
-                self.__logger.warning(f"Missing key for fuuid {fuuid}, canceling")
-                await self.__cancel_job(fuuid)
-                continue
-
-            image_file = None
-            media = lease.get('media')
-            if mimetype == 'application/pdf' or mimetype.startswith('text/'):
-                job_type = CONST_JOB_SUMMARY_TEXT
-            elif mimetype.startswith('image/'):
-                job_type = CONST_JOB_SUMMARY_IMAGE
-            else:
-                self.__logger.info(f"Unsupported mimetype {mimetype} for fuuid {fuuid}, canceling")
-                await self.__cancel_job(fuuid)
-                continue
-
-            try:
-                # Check to find a webp fuuid, will be smaller and easier to digest
-                images = media['images']
-                webp_img = [m for m in images.keys() if m.startswith('image/webp')].pop()
-                image_file = images[webp_img]
-                image_file['fuuid'] = image_file['hachage']
-            except (AttributeError, IndexError, TypeError):
-                pass
-
-            self.__logger.debug("Lease:\n%s", lease)
-            secret_key: bytes = multibase.decode('m'+key['cle_secrete_base64'])
-            decrypted_metadata = json.loads(dechiffrer_bytes_secrete(secret_key, metadata))
-
-            info: FileInformation = {
-                'job_type': job_type,
-                'lease_action': CONST_ACTION_SUMMARY,
-                'tuuid': lease.get('tuuid'),
-                'fuuid': lease.get('fuuid') or fuuid,
-                'user_id': lease['user_id'],
-                'language': 'en_US',
-                'domain': Constantes.DOMAINE_GROS_FICHIERS,
-                'cuuids': cuuids,
-                'metadata': decrypted_metadata,
-                'mimetype': lease.get('mimetype'),
-                'version': lease.get('version'),
-                'key': key,
-                'tmp_file': None,
-                'image_tmp_file': None,
-                'media': lease.get('media'),
-                'image_file': image_file,
-            }
-
-            # Encrypt the contents to put in a queue
-            # TODO - figure out a way to encrypt for all ollama_relai instances
-            certs = [self.__context.signing_key.enveloppe]
-            encrypted_job = chiffrer_document_cles(certs, info)
 
             # Put encrypted job on work queue
             try:
-                await producer.command(encrypted_job, 'ollama_relai', self.routing_action_work, Constantes.SECURITE_PRIVE, nowait=True)
+                encrypted_job = self.__prepare_job(parsed, lease)
+            except JobPreparationException as e:
+                if e.tuuid and e.fuuid:
+                    await self.__cancel_job(e.tuuid, e.fuuid)
+                else:
+                    self.__logger.error("Preparation exception on job and unable to get tuuid/fuuid to cancel: %s" % e)
+                continue
             except asyncio.TimeoutError:
-                self.__logger.warning(f"Timeout on submitting {job_type}, will retry")
+                self.__logger.warning(f"Timeout on submitting job, will retry")
                 return
 
+            await producer.command(encrypted_job, 'ollama_relai', self.routing_action_work, Constantes.SECURITE_PRIVE, nowait=True)
+
         pass
+
+    def __prepare_job(self, message, lease) -> dict:
+        secret_keys: list = message['secret_keys']
+
+        metadata = lease.get('metadata')
+        version = lease.get('version')
+        cuuids = lease.get('cuuids')
+        tuuid: Optional[str] = lease.get('tuuid')
+        fuuid: Optional[str] = None
+
+        cle_id = None
+        mimetype = lease.get('mimetype')
+        if version:
+            fuuid = version['fuuid']
+            cle_id = version.get('cle_id')
+            mimetype = mimetype or version.get('mimetype')
+
+        if metadata and not cle_id:
+            cle_id = cle_id or metadata.get('cle_id') or metadata.get('ref_hachage_bytes')
+        cle_id = cle_id or fuuid
+
+        try:
+            key = [k for k in secret_keys if k['cle_id'] == cle_id].pop()
+        except IndexError:
+            self.__logger.warning(f"Missing key for fuuid {fuuid}, canceling")
+            raise JobPreparationException(tuuid, fuuid)
+
+        image_file = None
+        media = lease.get('media')
+        if mimetype == 'application/pdf' or mimetype.startswith('text/'):
+            job_type = CONST_JOB_SUMMARY_TEXT
+        elif mimetype.startswith('image/'):
+            job_type = CONST_JOB_SUMMARY_IMAGE
+        else:
+            self.__logger.info(f"Unsupported mimetype {mimetype} for fuuid {fuuid}, canceling")
+            raise JobPreparationException(tuuid, fuuid)
+
+        try:
+            # Check to find a webp fuuid, will be smaller and easier to digest
+            images = media['images']
+            webp_img = [m for m in images.keys() if m.startswith('image/webp')].pop()
+            image_file = images[webp_img]
+            image_file['fuuid'] = image_file['hachage']
+        except (AttributeError, IndexError, TypeError):
+            pass
+
+        self.__logger.debug("Lease:\n%s", lease)
+        secret_key: bytes = multibase.decode('m' + key['cle_secrete_base64'])
+        decrypted_metadata = json.loads(dechiffrer_bytes_secrete(secret_key, metadata))
+
+        info: FileInformation = {
+            'job_type': job_type,
+            'lease_action': CONST_ACTION_SUMMARY,
+            'tuuid': lease.get('tuuid'),
+            'fuuid': lease.get('fuuid') or fuuid,
+            'user_id': lease['user_id'],
+            'language': 'en_US',
+            'domain': Constantes.DOMAINE_GROS_FICHIERS,
+            'cuuids': cuuids,
+            'metadata': decrypted_metadata,
+            'mimetype': lease.get('mimetype'),
+            'version': lease.get('version'),
+            'key': key,
+            'tmp_file': None,
+            'image_tmp_file': None,
+            'media': lease.get('media'),
+            'image_file': image_file,
+        }
+
+        # Encrypt the contents to put in a queue
+        # TODO - figure out a way to encrypt for all ollama_relai instances
+        certs = [self.__context.signing_key.enveloppe]
+        encrypted_job = chiffrer_document_cles(certs, info)
+
+        return encrypted_job
 
     async def __process_work_item(self, job: dict):
         self.__logger.debug("Processing work item\n%s", job)
@@ -340,7 +352,17 @@ class Processor:
         decrypted_job = dechiffrer_document(signing_key, encrypted_key, job)
         self.__logger.debug("Decrypted job\n%s" % decrypted_job)
 
-    async def __cancel_job(self, fuuid):
+    async def __cancel_job(self, tuuid: str, fuuid: str):
         self.__logger.debug(f"Canceling job on fuuid {fuuid}")
-        # TODO
-        pass
+        command = {'tuuid': tuuid, 'fuuid': fuuid}
+        producer = await self.__context.get_producer()
+        await producer.command(command, Constantes.DOMAINE_GROS_FICHIERS, "fileSummary",
+                               Constantes.SECURITE_PROTEGE, timeout=45)
+
+
+class JobPreparationException(Exception):
+
+    def __init__(self, tuuid: Optional[str], fuuid: Optional[str], *args, **kwargs):
+        super().__init__(args, kwargs)
+        self.tuuid = tuuid
+        self.fuuid = fuuid
