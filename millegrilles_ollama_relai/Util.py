@@ -1,6 +1,7 @@
 import asyncio
 import binascii
 import tempfile
+import base64
 
 import tiktoken
 
@@ -45,3 +46,10 @@ async def conditional_convert_to_png(mimetype: str, tmp_file: tempfile.Temporary
         await asyncio.to_thread(im.save, tmp_file, "png")
         tmp_file.truncate()
         tmp_file.seek(0)
+
+
+def encode_image_to_data_uri(temp_file: tempfile.TemporaryFile, mimetype: str = 'image/png'):
+    temp_file.seek(0)
+    encoded_string = base64.b64encode(temp_file.read()).decode('utf-8')
+    temp_file.seek(0)
+    return f'data:{mimetype};base64,{encoded_string}'

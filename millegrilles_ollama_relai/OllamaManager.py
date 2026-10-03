@@ -198,11 +198,13 @@ class OllamaManager:
 
         # Load the task type (python module with a Process class in it)
         processor = load_processor(self.__context, self.__attachment_handler, task_type, task_name, params)
-        await processor.setup()
-
-        # Spawn this new long running task
-        asyncio.create_task(processor.run(), name=f"processor.task.{task_name}")
-        self.__task_runners.append(processor)
+        try:
+            await processor.setup()
+            # Spawn this new long running task
+            asyncio.create_task(processor.run(), name=f"processor.task.{task_name}")
+            self.__task_runners.append(processor)
+        except:
+            self.__logger.exception(f"Error setting up task {task_name}, it will be ignored")
 
 
 def load_processor(context: OllamaContext, attachment_handler: FilehostConnection, task_type: str, task_name: str, params: dict):

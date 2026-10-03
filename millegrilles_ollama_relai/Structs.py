@@ -4,9 +4,9 @@ from pydantic import BaseModel
 
 
 class SummaryText(BaseModel):
+    title: str
     summary: str
-    # language: Optional[str]
-    tags: Optional[list[str]]
+    labels: Optional[list[str]]
 
 
 class SummaryKeywords(BaseModel):

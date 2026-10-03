@@ -942,13 +942,20 @@ async def format_image_prompt(language: str):
     return system_prompt, command_prompt
 
 
-async def format_text_prompt(language: str, context_len: int, completion_len: int, mimetype: str, tmp_file: tempfile.NamedTemporaryFile, token_padding=1024) -> (str, str):
+async def format_text_prompt(system_prompt: str, language: str, context_len: int, completion_len: int, mimetype: str, tmp_file: tempfile.NamedTemporaryFile, token_padding=1024) -> (str, str):
     encoding = tiktoken.encoding_for_model("text-embedding-3-small")
+
+    system_prompt = system_prompt + """
+# Personalized information
+
+   * User language: {language}
+
+You **MUST** reply in the user's language.
+    """
 
     char_multiplier = CONST_CHAR_MULTIPLIER
 
     params = {'language': language}
-    system_prompt = PROMPT_INDEXING_SYSTEM_DOCUMENT.format(**params)
 
     if mimetype == 'application/pdf':
         extraction_kwargs = {'strict': False}
@@ -969,7 +976,11 @@ async def format_text_prompt(language: str, context_len: int, completion_len: in
     else:
         raise ValueError(f"Unsupported document mimetype: {mimetype}")
 
-    command_prompt = f"<Document>\n{content}\n</Document>"
+    command_prompt = f"""
+<Document>\n{content}\n</Document>
+
+Make sure your response is in proper **JSON** formatting. It **MUST** begin with {{ and end with }}.
+"""
 
     # Trim content
     system_prompt_len = len(encoding.encode(system_prompt))
