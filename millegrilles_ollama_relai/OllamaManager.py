@@ -1,34 +1,25 @@
 import asyncio
+import json
 import logging
-import pathlib
 
 from asyncio import TaskGroup
 from typing import Callable, Awaitable, Optional
 
 from millegrilles_messages.bus.BusContext import ForceTerminateExecution
 from millegrilles_messages.messages import Constantes
-from millegrilles_messages.messages.MessagesModule import MessageWrapper
 from millegrilles_messages.structs.Filehost import Filehost
 from millegrilles_messages.Filehost import FilehostConnection
-from millegrilles_ollama_relai.DocumentIndexHandler import DocumentIndexHandler
-from millegrilles_ollama_relai.OllamaChatHandler import OllamaChatHandler
-from millegrilles_ollama_relai.OllamaContext import OllamaContext, RagConfiguration, UrlConfiguration
-from millegrilles_ollama_relai.OllamaInstanceManager import OllamaInstanceManager, OllamaInstance
-from millegrilles_ollama_relai.OllamaTools import OllamaToolHandler
+from millegrilles_ollama_relai.OllamaContext import OllamaContext
+from millegrilles_ollama_relai.OllamaInstanceManager import OllamaInstanceManager
 
 
 class OllamaManager:
 
-    def __init__(self, context: OllamaContext, ollama_instances: OllamaInstanceManager,
-                 attachment_handler: FilehostConnection, tool_handler: OllamaToolHandler, chat_handler: OllamaChatHandler,
-                 document_handler: DocumentIndexHandler):
+    def __init__(self, context: OllamaContext, ollama_instances: OllamaInstanceManager, attachment_handler: FilehostConnection):
         self.__logger = logging.getLogger(__name__+'.'+self.__class__.__name__)
         self.__context = context
         self.__ollama_instances = ollama_instances
         self.__attachment_handler = attachment_handler
-        self.__tool_handler = tool_handler
-        self.__chat_handler = chat_handler
-        self.__document_handler = document_handler
 
         self.__filehost_listeners: list[Callable[[Optional[Filehost]], Awaitable[None]]] = list()
 
@@ -41,11 +32,6 @@ class OllamaManager:
         return self.__context
 
     async def setup(self):
-        # Create staging folders
-        #self.__context.dir_ollama_staging.mkdir(parents=True, exist_ok=True)
-        # configuration = self.__context.configuration
-        # dir_rag = pathlib.Path(configuration.dir_rag)
-        # dir_rag.mkdir(parents=True, exist_ok=True)
         pass
 
     async def __stop_thread(self):
@@ -117,71 +103,25 @@ class OllamaManager:
 
         self.__logger.info("__reload_ai_configuration_thread Stopping")
 
-    async def register_chat(self, message: MessageWrapper):
-        return await self.__chat_handler.register_query(message)
-
-    async def process_chat(self, instance: OllamaInstance, message: MessageWrapper):
-        return await self.__chat_handler.process_chat(instance, message)
-
-    async def cancel_chat(self, message: MessageWrapper):
-        try:
-            # Block processing from redis
-            chat_id = message.parsed['chat_id']
-            await self.__ollama_instances.claim_query(chat_id)
-        except Exception:
-            pass  # Already locked (processing)
-
-        # Cancel the chat when already processing - this also puts a lock in memory in case redis is not available
-        return await self.__chat_handler.cancel_chat(message)
-
-    async def register_rag_query(self, message):
-        return await self.__document_handler.register_rag(message)
-
-    async def query_rag(self, instance: OllamaInstance, message: MessageWrapper):
-        return await self.__document_handler.query_rag(instance, message)
-
-    async def trigger_rag_indexing(self, delay: Optional[float] = None):
-        await self.__document_handler.trigger_indexing(delay=delay)
-
     async def __reload_ai_configuration(self):
         producer = await self.context.get_producer()
-        response = await producer.request(dict(), "AiLanguage", "getConfiguration", exchange=Constantes.SECURITE_PRIVE)
+        response = await producer.request(
+            {"filename": "ollama_relai"},
+            "CoreTopologie",
+            "requestConfigurationGetProperties",
+            exchange=Constantes.SECURITE_PUBLIC
+        )
         parsed = response.parsed
 
-        try:
-            chat_configuration = parsed['default']
-        except (TypeError, KeyError):
-            self.__context.chat_configuration = None  # No information
-        else:
-            self.__context.chat_configuration = chat_configuration
+        if parsed.get("ok") is False:
+            if parsed.get("code") == 404:
+                self.__logger.warning(f"Configuration file ollama_relai not created yet in CoreTopologie, ollama_relai will not do anything")
+                return
+            else:
+                raise Exception(f"Error getting configuration from CoreTopologie ({parsed.get("code")}): {parsed.get("err")}")
 
-        try:
-            model_configuration = parsed['models']
-        except (TypeError, KeyError):
-            self.__context.model_configuration = None  # No information
-        else:
-            self.__context.model_configuration = model_configuration
-
-        try:
-            urls = parsed['ollama_urls']['urls']
-        except (TypeError, KeyError):
-            pass  # No URL information
-        else:
-            await self.__ollama_instances.update_instance_list(urls)
-
-        try:
-            rag_configuration: RagConfiguration = parsed['rag']
-        except (TypeError, KeyError):
-            self.__context.rag_configuration = None  # No information
-        else:
-            self.__context.rag_configuration = rag_configuration
-
-        try:
-            url_configuration: UrlConfiguration = parsed['urls']
-        except (TypeError, KeyError):
-            self.__context.url_configuration = None  # No information
-        else:
-            self.__context.url_configuration = url_configuration
+        del parsed['__original']
+        self.__logger.debug(f"Configuration received:\n{json.dumps(parsed, indent=2)}")
 
         # For initial configuration load
         self.__context.ai_configuration_loaded.set()
