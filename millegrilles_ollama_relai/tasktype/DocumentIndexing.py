@@ -17,7 +17,7 @@ from millegrilles_messages.Filehost import FilehostConnection
 from millegrilles_messages.bus.PikaChannel import MilleGrillesPikaChannel
 from millegrilles_messages.bus.PikaQueue import MilleGrillesPikaQueueConsumer, RoutingKey
 from millegrilles_messages.chiffrage.DechiffrageUtils import dechiffrer_document, dechiffrer_bytes_secrete
-from millegrilles_messages.chiffrage.Mgs4 import chiffrer_document_cles
+from millegrilles_messages.chiffrage.Mgs4 import chiffrer_document_cles, chiffrer_mgs4_bytes_secrete
 from millegrilles_messages.messages import Constantes
 from millegrilles_messages.messages.MessagesModule import MessageWrapper
 from millegrilles_ollama_relai.DocumentIndexHandler import FileInformation, format_text_prompt
@@ -479,7 +479,6 @@ class Processor:
         await producer.command(command, Constantes.DOMAINE_GROS_FICHIERS, "fileSummary",
                                Constantes.SECURITE_PROTEGE, timeout=45)
 
-
     async def __run_summarize_file(
             self,
             job: FileInformation,
@@ -487,9 +486,6 @@ class Processor:
             image_tmp_file: Optional[tempfile.NamedTemporaryFile()] = None
     ) -> SummaryText:
         # Make sure to get the encryption information first to send the results to GrosFichiers, avoids working for nothing.
-        encryption_key = job['key']
-        secret_key: bytes = decode_base64_nopad(encryption_key['cle_secrete_base64'])
-        key_id = encryption_key['cle_id']
 
         # Ensure file pointers are reset
         if tmp_file:
@@ -499,7 +495,43 @@ class Processor:
 
         summary = await self.summarize_file(job, tmp_file, image_tmp_file)
 
+        await self.__submit_summary(job, summary)
+
         return summary
+
+    async def __submit_summary(self, job: FileInformation, summary: SummaryText):
+        key = job['key']
+        secret_key: bytes = decode_base64_nopad(key['cle_secrete_base64'])
+        key_id = key['cle_id']
+        cleartext_summary = json.dumps({"comment": f"{summary.title}\n\n{summary.summary}"})
+        cipher, encrypted_summary = chiffrer_mgs4_bytes_secrete(secret_key, cleartext_summary)
+        encrypted_summary['cle_id'] = key_id
+
+        if summary.labels:
+            cleartext_tags = json.dumps({"tags": summary.labels})
+            cipher, encrypted_tags = chiffrer_mgs4_bytes_secrete(secret_key, cleartext_tags)
+            encrypted_tags['cle_id'] = key_id
+        else:
+            encrypted_tags = None
+
+        # Send result as new comment for file
+        summary_command = {
+            'tuuid': job['tuuid'],
+            'fuuid': job['version']['fuuid'],
+            'comment': encrypted_summary,
+            'tags': encrypted_tags,
+        }
+
+        producer = await self.__context.get_producer()
+        for _ in range(5):
+            try:
+                await producer.command(summary_command, Constantes.DOMAINE_GROS_FICHIERS, "fileSummary",
+                                       Constantes.SECURITE_PROTEGE, timeout=45)
+                break
+            except asyncio.TimeoutError:
+                self.__logger.warning("Timeout sending summary result, will retry")
+                await self.__context.wait(5)
+
 
     def get_client(self) -> OpenaiAsyncClient:
         configuration = self.__context.configuration
