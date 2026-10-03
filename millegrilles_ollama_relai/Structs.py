@@ -38,3 +38,24 @@ class KnowledgeBaseSearchResponse:
 class MatchResult(BaseModel):
     summary: str
     match: bool
+
+
+class OllamaRelaiConfigurationPropertiesValue(TypedDict):
+    text: Optional[str]
+    inumber: Optional[int]
+    fnumber: Optional[float]
+
+
+class OllamaRelaiConfigurationProperties(TypedDict):
+    file_id: str
+    key: str
+    value: OllamaRelaiConfigurationPropertiesValue
+    last_modified: int
+
+
+class OllamaRelaiConfigurationFile(TypedDict):
+    file_id: str
+    filename: str
+    key_id: str
+    last_modified: int
+    list: list[OllamaRelaiConfigurationProperties]

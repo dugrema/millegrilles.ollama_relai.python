@@ -3,7 +3,7 @@ import json
 import logging
 
 from asyncio import TaskGroup
-from typing import Callable, Awaitable, Optional
+from typing import Callable, Awaitable, Optional, Any
 
 from millegrilles_messages.bus.BusContext import ForceTerminateExecution
 from millegrilles_messages.messages import Constantes
@@ -11,6 +11,8 @@ from millegrilles_messages.structs.Filehost import Filehost
 from millegrilles_messages.Filehost import FilehostConnection
 from millegrilles_ollama_relai.OllamaContext import OllamaContext
 from millegrilles_ollama_relai.OllamaInstanceManager import OllamaInstanceManager
+from millegrilles_ollama_relai.Structs import OllamaRelaiConfigurationFile, OllamaRelaiConfigurationProperties, \
+    OllamaRelaiConfigurationPropertiesValue
 
 
 class OllamaManager:
@@ -26,6 +28,10 @@ class OllamaManager:
         self.__load_ai_configuration_event = asyncio.Event()
         self.__load_filehost_event = asyncio.Event()
         self.__ollama_available = False
+
+        self.__current_configuration: Optional[OllamaRelaiConfigurationFile] = None     # Configuration as received
+        self.__property_dict: Optional[dict] = None                                     # Parsed properties
+        self.__tasks_dict: Optional[dict] = None                                        # Individual task properties
 
     @property
     def context(self):
@@ -122,6 +128,7 @@ class OllamaManager:
 
         del parsed['__original']
         self.__logger.debug(f"Configuration received:\n{json.dumps(parsed, indent=2)}")
+        await self.__process_configuration_changes(parsed)
 
         # For initial configuration load
         self.__context.ai_configuration_loaded.set()
@@ -140,3 +147,79 @@ class OllamaManager:
                 pass
 
         self.__logger.info("__ollama_watchdog_thread Stopping")
+
+    async def __process_configuration_changes(self, configuration: OllamaRelaiConfigurationFile):
+        if self.__current_configuration is not None:
+            # TODO - process changes
+            self.__logger.warning("TODO - handle configuration changes, IGNORING for now")
+            return
+
+        self.__current_configuration = configuration
+
+        property_dict, tasks_dict = parse_configuration(configuration)
+
+        self.__logger.debug(f"Configuration:\n{json.dumps(property_dict, indent=2)}")
+        self.__logger.debug(f"Tasks:\n{json.dumps(tasks_dict, indent=2)}")
+
+        try:
+            if get_property_int(property_dict, 'active') != 1:
+                self.__logger.info("General ollama_relai active flag not set, not starting tasks")
+                return
+        except KeyError:
+            return
+
+        self.__property_dict = property_dict
+        self.__tasks_dict = tasks_dict
+
+        await self.initialize_tasks()
+
+    async def initialize_tasks(self):
+        tasks_dict = self.__tasks_dict
+        if tasks_dict is None:
+            raise Exception("No task configuration to process")
+
+
+def get_property_text(properties: dict, key: str) -> Optional[str]:
+    try:
+        return properties[key]['text']
+    except KeyError:
+        return None
+
+def get_property_int(properties: dict, key: str) -> Optional[int]:
+    try:
+        return properties[key]['inumber']
+    except KeyError:
+        return None
+
+def get_property_float(properties: dict, key: str) -> Optional[float]:
+    try:
+        return properties[key]['fnumber']
+    except KeyError:
+        return None
+
+
+def parse_configuration(configuration: OllamaRelaiConfigurationFile) -> tuple[dict[Any, Any], dict[Any, Any]]:
+    property_dict = dict()
+    task_dict = dict()
+    for item in configuration['list']:
+        key = item['key']
+        if key.startswith("task."):
+            task_key = key.split('.')
+            task_name = task_key[1]
+            try:
+                task_values = task_dict[task_name]
+            except KeyError:
+                task_values = dict()
+                task_dict[task_name] = task_values
+            if task_key[2] == 'param':
+                try:
+                    task_params = task_values['params']
+                except KeyError:
+                    task_params = dict()
+                    task_values['params'] = task_params
+                task_params['.'.join(task_key[3:])] = item['value']
+            else:
+                task_values['.'.join(task_key[2:])] = item['value']
+        else:
+            property_dict[item['key']] = item['value']
+    return property_dict, task_dict
