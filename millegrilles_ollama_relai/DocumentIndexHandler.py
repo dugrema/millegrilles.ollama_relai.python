@@ -63,7 +63,6 @@ class FileInformation(TypedDict):
     mimetype: Optional[str]
     version: Optional[dict]
     key: Optional[dict]
-    decrypted_metadata: Optional[dict]
     tmp_file: Optional[tempfile.NamedTemporaryFile]
     image_tmp_file: Optional[tempfile.NamedTemporaryFile]
     media: Optional[dict]

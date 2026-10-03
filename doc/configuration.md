@@ -37,6 +37,7 @@ Supported parameters depend on processing module type.
     * task.1.routing_keys=rk_1,rk_2     # Registers queue "a_queue" with routing keys "rk_1,rk_2".
     * task.1.exchange=2.prive           # Exchange for the routing keys. Default is 2.prive.
     * task.1.queue_name=a_queue         # Registers on "commande.ollama_relai.a_queue" with auto-delete. Default is anonymous exclusive queue.
+    * task.1.batchsize=20               # Number of documents to get when requesting jobs
 
 About the tls_method: 
     
