@@ -54,7 +54,7 @@ class FileInformation(TypedDict):
     job_type: Optional[str]
     lease_action: str
     tuuid: Optional[str]
-    fuuid: Optional[str]
+    fuuid: str
     user_id: Optional[str]
     language: str
     domain: str

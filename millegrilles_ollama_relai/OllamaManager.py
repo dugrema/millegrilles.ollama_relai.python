@@ -197,7 +197,7 @@ class OllamaManager:
             return
 
         # Load the task type (python module with a Process class in it)
-        processor = load_processor(self.__context, task_type, task_name, params)
+        processor = load_processor(self.__context, self.__attachment_handler, task_type, task_name, params)
         await processor.setup()
 
         # Spawn this new long running task
@@ -205,11 +205,11 @@ class OllamaManager:
         self.__task_runners.append(processor)
 
 
-def load_processor(context:OllamaContext, task_type: str, task_name: str, params: dict):
+def load_processor(context: OllamaContext, attachment_handler: FilehostConnection, task_type: str, task_name: str, params: dict):
     import importlib
     module = importlib.import_module(f"millegrilles_ollama_relai.tasktype.{task_type}")
     cls = getattr(module, 'Processor')
-    return cls(context, task_name, params)
+    return cls(context, attachment_handler, task_name, params)
 
 def parse_configuration(configuration: OllamaRelaiConfigurationFile) -> tuple[dict[Any, Any], dict[Any, Any]]:
     property_dict = dict()

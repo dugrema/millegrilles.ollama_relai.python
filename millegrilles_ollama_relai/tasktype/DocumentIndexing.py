@@ -2,11 +2,14 @@ import asyncio
 import datetime
 import logging
 import json
+import nacl
+import tempfile
 from typing import Optional
 
 from cryptography.x509 import ExtensionNotFound
 from multibase import multibase
 
+from millegrilles_messages.Filehost import FilehostConnection
 from millegrilles_messages.bus.PikaChannel import MilleGrillesPikaChannel
 from millegrilles_messages.bus.PikaQueue import MilleGrillesPikaQueueConsumer, RoutingKey
 from millegrilles_messages.chiffrage.DechiffrageUtils import dechiffrer_document, dechiffrer_bytes_secrete
@@ -16,6 +19,7 @@ from millegrilles_messages.messages.MessagesModule import MessageWrapper
 from millegrilles_ollama_relai.DocumentIndexHandler import FileInformation
 from millegrilles_ollama_relai.OllamaContext import OllamaContext
 from millegrilles_ollama_relai.Structs import get_property_int
+from millegrilles_ollama_relai.Util import conditional_convert_to_png
 
 CONST_ACTION_SUMMARY = 'leaseForSummary'
 CONST_JOB_SUMMARY_TEXT = 'summaryText'
@@ -23,9 +27,10 @@ CONST_JOB_SUMMARY_IMAGE = 'summaryImage'
 
 class Processor:
 
-    def __init__(self, context: OllamaContext, task_name: str, params: dict):
+    def __init__(self, context: OllamaContext, attachment_handler: FilehostConnection, task_name: str, params: dict):
         self.__logger = logging.getLogger(__name__ + '.' + self.__class__.__name__)
         self.__context: OllamaContext = context
+        self.__attachment_handler: FilehostConnection = attachment_handler
         self.__task_name: str = task_name
         self.__params: dict = params
         self.__channels: Optional[list[MilleGrillesPikaChannel]] = None
@@ -205,8 +210,6 @@ class Processor:
         else:
             self.__logger.debug(f"Task {self.__task_name} unhandled message type received: {message_type}")
 
-        # self.__logger.info("__on_volatile_message Ignoring unknown action %s", message.routing_key)
-        # return {'ok': False, 'code': 404, 'err': 'Unknown operation'}
         return None
 
     async def __query_batch(self):
@@ -279,6 +282,9 @@ class Processor:
             cle_id = version.get('cle_id')
             mimetype = mimetype or version.get('mimetype')
 
+        if not fuuid:
+            raise Exception("Unandled job type - no fuuid")
+
         if metadata and not cle_id:
             cle_id = cle_id or metadata.get('cle_id') or metadata.get('ref_hachage_bytes')
         cle_id = cle_id or fuuid
@@ -316,7 +322,7 @@ class Processor:
             'job_type': job_type,
             'lease_action': CONST_ACTION_SUMMARY,
             'tuuid': lease.get('tuuid'),
-            'fuuid': lease.get('fuuid') or fuuid,
+            'fuuid': fuuid,
             'user_id': lease['user_id'],
             'language': 'en_US',
             'domain': Constantes.DOMAINE_GROS_FICHIERS,
@@ -349,8 +355,97 @@ class Processor:
             return
 
         # Decrypt key
-        decrypted_job = dechiffrer_document(signing_key, encrypted_key, job)
+        decrypted_job: FileInformation = dechiffrer_document(signing_key, encrypted_key, job)
         self.__logger.debug("Decrypted job\n%s" % decrypted_job)
+
+        fuuid = decrypted_job['fuuid']
+        secret_key_str = decrypted_job['key']['cle_secrete_base64']
+        # filename = decrypted_job['metadata']['nom']
+
+        file_to_download, image_file_to_download = await self.__get_files_to_download(decrypted_job)
+
+        try:
+            with tempfile.NamedTemporaryFile(mode='wb+') as tmp_file:
+                if file_to_download:
+                    await self.__download_file(fuuid, secret_key_str, file_to_download, tmp_file)
+                    tmp_file.seek(0)    # Reposition for reading open handle
+                    job['tmp_file'] = tmp_file
+
+                if image_file_to_download:
+                    with tempfile.NamedTemporaryFile(mode='wb+') as tmp_img_file:
+                        await self.__download_file(fuuid, secret_key_str, image_file_to_download, tmp_img_file)
+                        tmp_img_file.seek(0)    # Reposition for reading open handle
+                        job['image_tmp_file'] = tmp_img_file
+
+                        # Pre-process decrypted file image
+                        try:
+                            image_mimetype = job['image_file']['mimetype']
+                        except (AttributeError, KeyError):
+                            image_mimetype = 'image/webp'
+                        await conditional_convert_to_png(image_mimetype, tmp_img_file)
+                        tmp_img_file.seek(0)
+        except nacl.exceptions.RuntimeError as e:
+            tuuid = job.get('tuuid')
+            if tuuid:
+                self.__logger.error(
+                    f"Error decrypting fuuid {fuuid}, params nonce:{image_file_to_download} CANCELLING: {e}")
+                await self.__cancel_job('tuuid', job['fuuid'])
+            else:
+                self.__logger.error(
+                    f"Error decrypting fuuid {fuuid}, params nonce:{image_file_to_download}, missing tuuid, unable to cancel: {e}")
+        except:
+            self.__logger.exception("Error downloading files")
+
+    async def __get_files_to_download(self, job: FileInformation) -> (Optional[dict], Optional[dict]):
+        file_to_download = None
+        image_file_to_download = job.get('image_file')
+        key = job['key']
+        version = job['version']
+
+        # Special case - a PDF file will have both image and original file
+        mimetype = job['mimetype']
+        override_get_original = mimetype in ['application/pdf']
+
+        # Combine version and key to ensure legacy decryption info is available
+        if image_file_to_download is None or override_get_original:
+            # This is a standard file, use legacy key fallback approach
+            file_to_download = version.copy()
+            nonce = file_to_download.get('nonce') or key.get('nonce')
+            if nonce is None:
+                header = file_to_download.get('header') or key.get('header')
+                nonce = header[1:]
+
+            # Override the nonce to ensure the proper value is used
+            file_to_download['nonce'] = nonce
+
+            # info_decryption.update(job['key'])
+            file_to_download['format'] = file_to_download.get('format') or key.get(
+                'format') or 'mgs4'  # Default format
+        else:
+            # This is an attached/generated file, e.g. media
+            try:
+                nonce = image_file_to_download['nonce']
+            except KeyError:
+                nonce = image_file_to_download['header'][1:]
+
+            # Override the nonce to ensure the proper value is used
+            image_file_to_download['nonce'] = nonce
+
+            # info_decryption.update(job['key'])
+            image_file_to_download['format'] = image_file_to_download.get('format') or key.get(
+                'format') or 'mgs4'  # Default format
+
+        return file_to_download, image_file_to_download
+
+    async def __download_file(self, fuuid: str, secret_key_str: str, file_to_download: dict, tmp_file: tempfile.TemporaryFile) -> int:
+        # For media encoded thumbnails/images, need to stick to file_to_download
+        try:
+            filesize = await self.__attachment_handler.download_decrypt_file(
+                secret_key_str, file_to_download, tmp_file)
+            self.__logger.debug(f"Downloaded {filesize} bytes for file {fuuid}")
+            return filesize
+        except* asyncio.CancelledError:
+            raise Exception(f"Error downloading fuuid {fuuid}, will retry")
 
     async def __cancel_job(self, tuuid: str, fuuid: str):
         self.__logger.debug(f"Canceling job on fuuid {fuuid}")
