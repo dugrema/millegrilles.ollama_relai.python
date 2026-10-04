@@ -53,7 +53,6 @@ class Processor:
         self.__connection_in_error = False  # Used to disable work and test the connection again
         worker_count = get_property_int(task_properties['params'], 'workers') or 1
         self.__workers_busy = asyncio.BoundedSemaphore(value=worker_count)
-        self.__download_threads = asyncio.BoundedSemaphore(value=2)
 
         # Configuration from CoreTopology
         self.__task_name: str = task_name
@@ -561,7 +560,7 @@ class Processor:
     async def __download_file(self, fuuid: str, secret_key_str: str, file_to_download: dict, tmp_file: tempfile.TemporaryFile) -> int:
         # For media encoded thumbnails/images, need to stick to file_to_download
         try:
-            async with self.__download_threads: # Limit number of simultaneous downloads
+            async with self.__context.download_semaphore: # Limit number of simultaneous downloads
                 filesize = await self.__attachment_handler.download_decrypt_file(
                     secret_key_str, file_to_download, tmp_file)
             self.__logger.debug(f"Downloaded {filesize} bytes for file {fuuid}")

@@ -48,6 +48,9 @@ class OllamaContext(MilleGrillesBusContext):
         self.ai_configuration_loaded = asyncio.Event()
         self.active = False
 
+        # Limit the number of simultaneous downloads
+        self.download_semaphore = asyncio.BoundedSemaphore(value=2)
+
         # self.url_configuration: Optional[UrlConfiguration] = None
         # self.model_configuration: Optional[ModelConfiguration] = None
         # self.rag_configuration: Optional[RagConfiguration] = None
