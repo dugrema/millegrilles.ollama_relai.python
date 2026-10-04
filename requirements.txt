@@ -1,11 +1,11 @@
 pypdf==6.14.2
 # ollama==0.6.2
 openai==3.24.0
-# langchain_core==1.5.0
-# langchain-ollama==1.1.0
-# langchain_chroma==1.1.0
-# langchain_community==0.4.2
-# langchain_text_splitters==1.1.2
+langchain_core==1.5.0
+langchain-ollama==1.1.0
+langchain_chroma==1.1.0
+langchain_community==0.4.2
+langchain_text_splitters==1.1.2
 # Note : httpx 0.28+ has an issue with cert/verify (or it changed)
 httpx==0.28.1
 tiktoken==0.14.0

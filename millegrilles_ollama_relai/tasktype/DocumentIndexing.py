@@ -2,6 +2,8 @@ import asyncio
 import datetime
 import logging
 import json
+
+import math
 import nacl
 import tempfile
 import httpx
@@ -9,9 +11,12 @@ import openai
 import pydantic
 from typing import Optional
 
+import tiktoken
 from cryptography.x509 import ExtensionNotFound
+from langchain_community.document_loaders import PyPDFLoader
 from multibase import multibase
 from openai import AsyncClient as OpenaiAsyncClient
+from pypdf.errors import PdfStreamError
 
 from millegrilles_messages.Filehost import FilehostConnection
 from millegrilles_messages.bus.PikaChannel import MilleGrillesPikaChannel
@@ -20,7 +25,7 @@ from millegrilles_messages.chiffrage.DechiffrageUtils import dechiffrer_document
 from millegrilles_messages.chiffrage.Mgs4 import chiffrer_document_cles, chiffrer_mgs4_bytes_secrete
 from millegrilles_messages.messages import Constantes
 from millegrilles_messages.messages.MessagesModule import MessageWrapper
-from millegrilles_ollama_relai.DocumentIndexHandler import FileInformation, format_text_prompt
+from millegrilles_ollama_relai.DocumentIndexHandler import FileInformation
 from millegrilles_ollama_relai.OllamaContext import OllamaContext
 from millegrilles_ollama_relai.Structs import get_property_int, get_property_text, get_property_float, SummaryText
 from millegrilles_ollama_relai.Util import conditional_convert_to_png, decode_base64_nopad, cleanup_json_output, \
@@ -29,7 +34,7 @@ from millegrilles_ollama_relai.Util import conditional_convert_to_png, decode_ba
 CONST_ACTION_SUMMARY = 'leaseForSummary'
 CONST_JOB_SUMMARY_TEXT = 'summaryText'
 CONST_JOB_SUMMARY_IMAGE = 'summaryImage'
-CONST_CHAR_MULTIPLIER = 2.5
+CONST_CHAR_MULTIPLIER = 4.0
 CONST_SUMMARY_NUM_PREDICT = 6144
 
 class Processor:
@@ -61,7 +66,7 @@ class Processor:
         self.__logger.info(f"Setting up DocumentIndexing task {self.__task_name} with params {self.__params}...")
         await self.__set_up_mq()
 
-        self.__fetch_batch_size = get_property_int(self.__params, 'batchsize') or 20
+        self.__fetch_batch_size = get_property_int(self.__params, 'batchsize') or 5
         self.__api_url = get_property_text(self.__params, 'url')
         if self.__api_url is None:
             raise Exception("API URL not configured")
@@ -200,13 +205,8 @@ class Processor:
             roles = enveloppe.get_roles
         except ExtensionNotFound:
             roles = list()
-        try:
-            domains_env = enveloppe.get_domaines
-        except ExtensionNotFound:
-            domains_env = None
 
         message_type = message.routing_key.split('.')[0]
-        domain = message.routage['domaine']
         action = message.routage['action']
         estampille = message.estampille
 
@@ -372,17 +372,22 @@ class Processor:
             self.__logger.error("No keys available to decrypt job, skipping")
             return
 
-        # Decrypt key
-        decrypted_job: FileInformation = dechiffrer_document(signing_key, encrypted_key, job)
-        self.__logger.debug("Decrypted job\n%s" % decrypted_job)
-
-        fuuid = decrypted_job['fuuid']
-        secret_key_str = decrypted_job['key']['cle_secrete_base64']
-        # filename = decrypted_job['metadata']['nom']
-
-        file_to_download, image_file_to_download = await self.__get_files_to_download(decrypted_job)
+        try:
+            # Decrypt key
+            decrypted_job: FileInformation = dechiffrer_document(signing_key, encrypted_key, job)
+            self.__logger.debug("Decrypted job\n%s" % decrypted_job)
+        except nacl.exceptions.RuntimeError:
+            self.__logger.exception(
+                f"Error decrypting job info for fuuid {fuuid} (wrong key?) - will retry")
+            return
 
         try:
+            fuuid = decrypted_job['fuuid']
+            secret_key_str = decrypted_job['key']['cle_secrete_base64']
+            # filename = decrypted_job['metadata']['nom']
+
+            file_to_download, image_file_to_download = await self.__get_files_to_download(decrypted_job)
+
             with tempfile.NamedTemporaryFile(mode='wb+') as tmp_file:
                 if file_to_download:
                     await self.__download_file(fuuid, secret_key_str, file_to_download, tmp_file)
@@ -409,15 +414,15 @@ class Processor:
 
                 self.__logger.debug("Summary:\n%s", summary)
 
-        except nacl.exceptions.RuntimeError as e:
+        except nacl.exceptions.RuntimeError:
             tuuid = job.get('tuuid')
             if tuuid:
-                self.__logger.error(
-                    f"Error decrypting fuuid {fuuid}, params nonce:{image_file_to_download} CANCELLING: {e}")
+                self.__logger.exception(
+                    f"Error during decryption of files for fuuid {fuuid} CANCELLING")
                 await self.__cancel_job('tuuid', job['fuuid'])
             else:
-                self.__logger.error(
-                    f"Error decrypting fuuid {fuuid}, params nonce:{image_file_to_download}, missing tuuid, unable to cancel: {e}")
+                self.__logger.exception(
+                    f"Error during decryption of files for fuuid {fuuid}, also missing tuuid, unable to cancel")
         except:
             self.__logger.exception("Error downloading files")
 
@@ -559,77 +564,35 @@ class Processor:
         job_type = job['job_type']
         language = job['language']
 
-        if noformat:
-            format = None
-        else:
-            format = SummaryText
-
         token_padding = 768
 
         if job_type == CONST_JOB_SUMMARY_TEXT and tmp_file:
-            raise NotImplementedError('TODO')
             tmp_file.seek(0)
             effective_context = self.__context_length
             if self.__supports_vision and image_tmp_file:
                 # Also add image, can help with PDFs that have no text content
                 image_tmp_file.seek(0)
-                image_content = await asyncio.to_thread(image_tmp_file.read)
+                image_uri = await asyncio.to_thread(encode_image_to_data_uri, image_tmp_file, 'image/png')
+                # image_content = await asyncio.to_thread(image_tmp_file.read)
                 image_tmp_file.seek(0)
-                images = [image_content]
-                effective_context -= 512  # Give enough space for the image
+                # images = [image_content]
+                effective_context -= 1024  # Give enough space for the image
             else:
-                images = None
+                # images = None
+                image_uri = None
 
-            for i in range(0, 3):
-                tmp_file.seek(0)
-                system_prompt, command_prompt = await format_text_prompt(
-                    self.__document_prompt,
-                    language,
-                    effective_context,
-                    CONST_SUMMARY_NUM_PREDICT,
-                    job['mimetype'],
-                    tmp_file,
-                    token_padding=token_padding
-                )
-
-                try:
-                    response = await client.chat.completions.create(
-                        model=self.__model,
-                        prompt=command_prompt,
-                        system=system_prompt,
-                        response_format=format,
-                        max_len=CONST_SUMMARY_NUM_PREDICT,
-                        temperature=self.__temperature,
-                        images=images,
-                    )
-                    # response = await client.generate(
-                    #     model=self.__model,
-                    #     prompt=command_prompt,
-                    #     system=system_prompt,
-                    #     response_format=format,
-                    #     max_len=CONST_SUMMARY_NUM_PREDICT,
-                    #     temperature=self.__temperature,
-                    #     images=images,
-                    # )
-                    break
-                except openai.BadRequestError as bre:
-                    self.__logger.warning("Error summarizing file tuuid:%s/fuuid:%s padding %s: %s", job.get('tuuid'), job.get('fuuid'), token_padding, bre)
-                    # Likely that context was exceeded (wrong tokenizer), retry by reducing availble context size
-                    try:
-                        response_json = bre.response.json()
-                        error = response_json['error']
-                        n_ctx = error['n_ctx']
-                        n_prompt_tokens = error['n_prompt_tokens']
-                        # Calculate ratio, remove the padding (sys prompt) from the returned context
-                        ratio = n_prompt_tokens / (n_ctx - token_padding)
-                    except (KeyError, ValueError, TypeError, AttributeError, json.JSONDecodeError):
-                        # Default to 33% excess
-                        ratio = 1.33
-
-                    # Reduce the effective available context by ratio sent back through error response
-                    effective_context = int(effective_context / ratio)
-            else:
-                raise ValueError(f"Unable to summarize file: tuuid:{job.get('tuuid')}/fuuid:{job.get('fuuid')}")
+            system_prompt, command_prompt = await self.format_text_prompt(
+                self.__document_prompt,
+                language,
+                effective_context,
+                CONST_SUMMARY_NUM_PREDICT,
+                job['mimetype'],
+                tmp_file
+            )
+            content = [{'type': 'input_text', 'text': command_prompt}]
+            if image_uri:
+                content.append({'type': 'input_image', 'image_url': image_uri})
+            input_history = [{'role': 'user', 'content': content}]
 
         elif job_type == CONST_JOB_SUMMARY_IMAGE:
             try:
@@ -654,43 +617,43 @@ class Processor:
                     {'type': 'input_image', 'image_url': image_uri},
                 ]
             }]
-
-            for i in range(3):
-                if i > 0:
-                    self.__logger.debug("Resubmitting\n%s", input_history[1:])
-                response = await client.responses.create(
-                    model=self.__model,
-                    instructions=system_prompt,
-                    max_output_tokens=CONST_SUMMARY_NUM_PREDICT,
-                    temperature=self.__temperature,
-                    input=input_history,
-                )
-
-                if response.status != 'completed':
-                    raise Exception(f"Error response, status {response.status}")
-
-                result_text = response.output_text
-                self.__logger.debug("Output text: %s", result_text)
-
-                content = cleanup_json_output(result_text)
-                self.__logger.debug("JSON content: %s", content)
-                try:
-                    summary = SummaryText.model_validate_json(content)
-                    break
-                except pydantic.ValidationError as ve:
-                    self.__logger.warning("Error validating response: %s", ve)
-                    validation_error = str(ve)
-                    input_history.append({
-                        'role': 'user',
-                        'content': result_text
-                    })
-                    input_history.append({
-                        'role': 'user',
-                        'content': f'Pydantic reported a validation error, this may be due to unreported schema changes. Check the error and try again.\n{validation_error}'
-                    })
-                    pass
         else:
             raise ValueError(f"Unsupported job type: {job_type}")
+
+        for i in range(3):
+            if i > 0:
+                self.__logger.debug("Resubmitting\n%s", input_history[1:])
+            response = await client.responses.create(
+                model=self.__model,
+                instructions=system_prompt,
+                max_output_tokens=CONST_SUMMARY_NUM_PREDICT,
+                temperature=self.__temperature,
+                input=input_history,
+            )
+
+            if response.status != 'completed':
+                raise Exception(f"Error response, status {response.status}")
+
+            result_text = response.output_text
+            self.__logger.debug("Output text: %s", result_text)
+
+            content = cleanup_json_output(result_text)
+            self.__logger.debug("JSON content: %s", content)
+            try:
+                summary = SummaryText.model_validate_json(content)
+                break
+            except pydantic.ValidationError as ve:
+                self.__logger.warning("Error validating response: %s", ve)
+                validation_error = str(ve)
+                input_history.append({
+                    'role': 'user',
+                    'content': result_text
+                })
+                input_history.append({
+                    'role': 'user',
+                    'content': f'Pydantic reported a validation error, this may be due to unreported schema changes. Check the error and try again.\n{validation_error}'
+                })
+                pass
 
         self.__logger.debug("Summary: %s", summary)
         return summary
@@ -702,13 +665,101 @@ class Processor:
 
 The output is validated with this Pydantic schema: {SummaryText.model_fields}
 
-# Personalized information
+## Personalized information
 
    * User language: {language}
 
 You **MUST** reply in the user's language.
         """
         command_prompt = f"Describe this image. Make sure your response is in proper **JSON** formatting. It **MUST** begin with {{ and end with }}."
+
+        return system_prompt, command_prompt
+
+    async def format_text_prompt(
+            self,
+            system_prompt: str,
+            language: str,
+            context_len: int,
+            completion_len: int,
+            mimetype: str,
+            tmp_file: tempfile.NamedTemporaryFile) -> (str, str):
+        encoding = tiktoken.encoding_for_model("text-embedding-3-small")
+
+        system_prompt = system_prompt + f"""
+
+## Output format
+
+The output is validated with this Pydantic schema: {SummaryText.model_fields}
+
+## Personalized information
+
+    * User language: {language}
+
+You **MUST** reply in the user's language.
+        """
+
+        char_multiplier = CONST_CHAR_MULTIPLIER
+
+        if mimetype == 'application/pdf':
+            extraction_kwargs = {'strict': False}
+            loader = PyPDFLoader(tmp_file.name, mode="single", extraction_kwargs=extraction_kwargs)
+            try:
+                document_list = await asyncio.to_thread(loader.load)
+            except (AttributeError, PdfStreamError) as e:
+                raise FatalSummaryException(e)
+            content = document_list[0].page_content
+
+        elif mimetype.startswith('text/'):
+            content = await asyncio.to_thread(tmp_file.read, char_multiplier * context_len)
+            try:
+                content = content.decode('utf-8')
+            except UnicodeDecodeError as e:
+                raise FatalSummaryException(e)
+
+        else:
+            raise ValueError(f"Unsupported document mimetype: {mimetype}")
+
+        command_prompt = f"""
+    <Document>\n{content}\n</Document>
+
+    Make sure your response is in proper **JSON** formatting. It **MUST** begin with {{ and end with }}.
+    """
+
+        # Trim content
+        system_prompt_len = len(encoding.encode(system_prompt))
+        free_space = context_len - system_prompt_len - completion_len
+        try:
+            encoded_content = encoding.encode(content)
+            encoded_content_len = len(encoded_content)
+        except ValueError:
+            # Unable to encode, using estimate
+            encoded_content = None
+            encoded_content_len = int(math.floor(len(content) / CONST_CHAR_MULTIPLIER))
+
+        if encoded_content_len > free_space:
+            try:
+                # Truncate tokens,
+                if encoded_content:
+                    encoded_content = encoded_content[0:free_space]
+                    content = encoding.decode(encoded_content)
+                else:
+                    free_chars = int(free_space * CONST_CHAR_MULTIPLIER)
+                    content = content[0:free_chars]
+                self.__logger.info(
+                    f"Truncated document to {free_space} tokens ({len(content)} chars). Initial len:{len(system_prompt + command_prompt)}")
+                # Prepare a new prompt with truncated output
+                command_prompt = f"<Document>\n{content}\n</Document>"
+            except IndexError:
+                self.__logger.debug(f"Document not truncated, len: {len(content)}/{context_len}")
+        else:
+            if encoded_content:
+                self.__logger.debug(
+                    f"Document not truncated, {len(encoded_content) + system_prompt_len}/{context_len} tokens ({len(system_prompt + command_prompt)} chars)")
+            else:
+                self.__logger.debug(f"Document not truncated, ({len(system_prompt + command_prompt)} chars)")
+            # break
+
+        tmp_file.seek(0)
 
         return system_prompt, command_prompt
 
@@ -720,3 +771,6 @@ class JobPreparationException(Exception):
         self.tuuid = tuuid
         self.fuuid = fuuid
 
+
+class FatalSummaryException(Exception):
+    pass
