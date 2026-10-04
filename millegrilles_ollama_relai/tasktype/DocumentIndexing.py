@@ -51,6 +51,9 @@ class Processor:
         self.__worker_channels: Optional[list[MilleGrillesPikaChannel]] = None
         self.__fetch_event = asyncio.Event()
         self.__connection_in_error = False  # Used to disable work and test the connection again
+        worker_count = get_property_int(task_properties['params'], 'workers') or 1
+        self.__workers_busy = asyncio.BoundedSemaphore(value=worker_count)
+        self.__download_threads = asyncio.BoundedSemaphore(value=2)
 
         # Configuration from CoreTopology
         self.__task_name: str = task_name
@@ -184,9 +187,12 @@ class Processor:
                 return  # Stopping
             self.__fetch_event.clear()  # Reset flag
 
-            self.__logger.debug(f"Task {self.__task_name} fetching new jobs")
             try:
-                await self.__query_batch()
+                if not self.__workers_busy.locked():  # Only get new jobs if at least one worker is idle
+                    self.__logger.debug(f"Task {self.__task_name} fetching new jobs")
+                    await self.__query_batch()
+                else:
+                    self.__logger.debug(f"Task {self.__task_name} all workers busy, not fetching new jobs")
             except:
                 self.__logger.exception("Error fetching batch of documents")
 
@@ -294,9 +300,14 @@ class Processor:
             if action == self.routing_action_work and 'ollama_relai' in roles:
                 self.__logger.debug(f"Task {self.__task_name} new work received")
                 try:
-                    await self.__process_work_item(message.parsed)
+                    async with self.__workers_busy:  # Used to keep track on number of busy workers, not block
+                        await self.__process_work_item(message.parsed)
                 except:
                     self.__logger.exception("Error processing work item")
+
+                # Set the fetch event - still waits 5 seconds, so if any worker not busy by then we get a job fetch
+                self.__fetch_event.set()
+
                 return None
             else:
                 self.__logger.debug(f"Task {self.__task_name} unhandled action received: {action}")
@@ -550,8 +561,9 @@ class Processor:
     async def __download_file(self, fuuid: str, secret_key_str: str, file_to_download: dict, tmp_file: tempfile.TemporaryFile) -> int:
         # For media encoded thumbnails/images, need to stick to file_to_download
         try:
-            filesize = await self.__attachment_handler.download_decrypt_file(
-                secret_key_str, file_to_download, tmp_file)
+            async with self.__download_threads: # Limit number of simultaneous downloads
+                filesize = await self.__attachment_handler.download_decrypt_file(
+                    secret_key_str, file_to_download, tmp_file)
             self.__logger.debug(f"Downloaded {filesize} bytes for file {fuuid}")
             return filesize
         except* asyncio.CancelledError:
