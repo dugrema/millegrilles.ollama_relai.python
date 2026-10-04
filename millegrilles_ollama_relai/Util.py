@@ -43,7 +43,7 @@ IMG_SIDE_MAX = 800
 
 async def conditional_convert_to_png(mimetype: str, tmp_file: tempfile.TemporaryFile, file_len: Optional[int] = None):
     # Check that the file is in a supported file format
-    must_convert = mimetype not in ['image/png', 'image/jpg', 'image/jpeg', 'image/webp']
+    must_convert = mimetype not in ['image/png', 'image/jpg', 'image/jpeg']
 
     if not must_convert:
         # Check if file is large
