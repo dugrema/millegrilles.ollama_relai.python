@@ -50,6 +50,7 @@ class OllamaContext(MilleGrillesBusContext):
 
         # Limit the number of simultaneous downloads
         self.download_semaphore = asyncio.BoundedSemaphore(value=2)
+        self.convert_image_semaphore = asyncio.BoundedSemaphore(value=1)
 
         # self.url_configuration: Optional[UrlConfiguration] = None
         # self.model_configuration: Optional[ModelConfiguration] = None

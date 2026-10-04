@@ -490,7 +490,8 @@ class Processor:
                             image_mimetype = job['image_file']['mimetype']
                         except (AttributeError, KeyError):
                             image_mimetype = 'image/webp'
-                        await conditional_convert_to_png(image_mimetype, tmp_img_file, file_size)
+                        async with self.__context.convert_image_semaphore:  # Limit memory usage (loads all in RAM)
+                            await conditional_convert_to_png(image_mimetype, tmp_img_file, file_size)
                         tmp_img_file.seek(0)
 
                         summary = await self.__run_summarize_file(decrypted_job, tmp_file, tmp_img_file)
