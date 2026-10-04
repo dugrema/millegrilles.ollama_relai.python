@@ -46,7 +46,8 @@ class Processor:
         self.__task_name: str = task_name
         self.__task_properties: dict = task_properties
         self.__params = task_properties['params']
-        self.__channels: Optional[list[MilleGrillesPikaChannel]] = None
+        self.__main_channel: Optional[MilleGrillesPikaChannel] = None
+        self.__worker_channels: Optional[list[MilleGrillesPikaChannel]] = None
         self.__stop_event = asyncio.Event()
         self.__fetch_event = asyncio.Event()
         self.__fetch_batch_size = 20
@@ -57,6 +58,8 @@ class Processor:
         self.__model = 'NONAME'
         self.__document_prompt = None
         self.__image_prompt = None
+        self.__connection_in_error = False  # Used to disable work and test the connection again
+        self.__stop_thread_holder: Optional[asyncio.Task] = None
 
     @property
     def routing_action_work(self):
@@ -80,6 +83,7 @@ class Processor:
 
     async def __stop_thread(self):
         await self.__context.wait()
+        self.__stop_thread_holder = None    # Self cleanup
         self.__stop_event.set()
         # Release all threads
         self.__fetch_event.set()
@@ -87,7 +91,7 @@ class Processor:
     async def run(self):
         # Start all tasks
         self.__logger.debug(f"Running task processor {self.__task_name}")
-        asyncio.create_task(self.__stop_thread())   # Sets the stop event
+        self.__stop_thread_holder = asyncio.create_task(self.__stop_thread())   # Sets the stop event
 
         # Work threads
         asyncio.create_task(self.__job_fetch_thread())
@@ -95,21 +99,64 @@ class Processor:
         while not self.__stop_event.is_set():
             self.__logger.debug(f"Still running task {self.__task_name}")
             try:
-                self.__fetch_event.set()    # Fetches new jobs
+                await self.__repair_connection()
+                if not self.__connection_in_error:
+                    self.__fetch_event.set()    # Fetches new jobs
                 await asyncio.wait_for(self.__stop_event.wait(), 30)
             except asyncio.TimeoutError:
                 pass
 
         # Stop processing
-        if self.__channels:
-            for channel in self.__channels:
+        if self.__main_channel:
+            await self.__main_channel.stop_consuming()
+            await self.__context.bus_connector.remove_channel(self.__main_channel)
+            self.__main_channel = None
+
+        if self.__worker_channels:
+            for channel in self.__worker_channels:
                 await channel.stop_consuming()
                 await self.__context.bus_connector.remove_channel(channel)
-            self.__channels = None
+            self.__worker_channels = None
+
+        if self.__stop_thread_holder:
+            self.__stop_thread_holder.cancel("Stopping")
 
     async def stop(self):
         self.__logger.debug(f"Stopping task processor {self.__task_name}")
         self.__stop_event.set()
+
+    async def __disable_work(self):
+        self.__connection_in_error = True
+        # Stop processing work
+        channels = self.__worker_channels
+        if channels:
+            self.__worker_channels = None
+            for channel in channels:
+                await channel.stop_consuming()
+                await self.__context.bus_connector.remove_channel(channel)
+
+    async def __repair_connection(self):
+        if not self.__connection_in_error:
+            return
+
+        # Run a dummy query against the API to test for presence
+        client = self.get_client()
+        try:
+            _response = await client.responses.create(
+                model=self.__model,
+                instructions='This is a connection test.',
+                temperature=self.__temperature,
+                input='This is a connection test. Just reply with OK.',
+            )
+        except openai.APIConnectionError as e:
+            self.__logger.warning("API connection still in error: %s" % e)
+            return
+
+        # Connection fixed
+        self.__connection_in_error = False
+        if not self.__worker_channels:
+            await self.__set_up_workers()
+        self.__logger.info("API connection restored")
 
     async def __job_fetch_thread(self):
         while not self.__stop_event.is_set():
@@ -129,9 +176,6 @@ class Processor:
 
     async def __set_up_mq(self):
         # Initialize queue that listens to external events
-        channels = list()
-        worker_count = get_property_int(self.__params, 'workers') or 1
-        self.__logger.debug(f"DocumentIndexing task {self.__task_name} worker count: {worker_count}")
 
         # Set-up the new fuuid listener, triggers job queries
         q_instance = MilleGrillesPikaQueueConsumer(
@@ -145,10 +189,18 @@ class Processor:
             Constantes.SECURITE_PUBLIC, 'evenement.filecontroler.filehostNewFuuid'))
         q_channel = MilleGrillesPikaChannel(self.__context, prefetch_count=1)
         q_channel.add_queue(q_instance)
-        channels.append(q_channel)
+        self.__main_channel = q_channel
         await self.__context.bus_connector.add_channel(q_channel)
         await q_channel.start_consuming()
 
+        # Set up worker q and all consumers
+        await self.__set_up_workers()
+
+    async def __set_up_workers(self):
+        worker_count = get_property_int(self.__params, 'workers') or 1
+        self.__logger.debug(f"DocumentIndexing task {self.__task_name} worker count: {worker_count}")
+
+        channels = list()
         # Set-up worker queues
         for _ in range(worker_count):
             q_instance = MilleGrillesPikaQueueConsumer(
@@ -169,7 +221,7 @@ class Processor:
             channels.append(q_channel)
             await self.__context.bus_connector.add_channel(q_channel)
             await q_channel.start_consuming()
-        self.__channels = channels
+        self.__worker_channels = channels
 
     async def __on_newfuuid_event(self, message: MessageWrapper):
         # Authorization check
@@ -423,6 +475,11 @@ class Processor:
             else:
                 self.__logger.exception(
                     f"Error during decryption of files for fuuid {fuuid}, also missing tuuid, unable to cancel")
+        except openai.APIConnectionError as e:
+            self.__logger.warning("API error: %s", e)
+            # This is a connection error, link is down
+            await self.__disable_work()
+
         except:
             self.__logger.exception("Error downloading files")
 
