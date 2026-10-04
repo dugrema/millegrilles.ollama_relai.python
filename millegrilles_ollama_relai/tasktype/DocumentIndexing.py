@@ -453,7 +453,7 @@ class Processor:
             self.__logger.debug("Decrypted job\n%s" % decrypted_job)
         except nacl.exceptions.RuntimeError:
             self.__logger.exception(
-                f"Error decrypting job info for fuuid {fuuid} (wrong key?) - will retry")
+                f"Error decrypting job info (wrong key?) - will retry")
             return
 
         try:
