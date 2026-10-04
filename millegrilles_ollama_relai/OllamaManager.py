@@ -103,10 +103,8 @@ class OllamaManager:
                 self.__logger.exception("Error loading ai configuration")
                 await self.__context.wait(20)
 
-            try:
-                await asyncio.wait_for(self.__load_ai_configuration_event.wait(), 300)
-            except asyncio.TimeoutError:
-                pass  # Loop
+            # Wait for the next trigger
+            await self.__load_ai_configuration_event.wait()
 
         self.__logger.info("__reload_ai_configuration_thread Stopping")
 
