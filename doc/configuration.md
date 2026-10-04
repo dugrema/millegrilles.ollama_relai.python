@@ -28,16 +28,20 @@ These are optional properties for the worker.
 These values get passed to the worker by name, e.g. DocumentIndexing(url=..., api=..., model=...). 
 Supported parameters depend on processing module type.
 
+### DocumentIndexing type
+
+Required properties
+
     * task.1.param.url=http://server.com:8000/v1
-    * task.1.param.tls_method=mtls
-    * task.1.param.api=openai
+    * task.1.param.prompt_documents=My long prompt ... for doing a specific task ...
+    * task.1.param.prompt_images=My long prompt ... for doing a specific task ...
+
+Optional properties (defaults shown)
+
+    * task.1.param.tls_method=mtls  # Options are: mtls, external, nocheck
     * task.1.param.model=vision
     * task.1.param.context=20000
-    * task.1.param.prompt=My long prompt ... for doing a specific task ...
-    * task.1.routing_keys=rk_1,rk_2     # Registers queue "a_queue" with routing keys "rk_1,rk_2".
-    * task.1.exchange=2.prive           # Exchange for the routing keys. Default is 2.prive.
-    * task.1.queue_name=a_queue         # Registers on "commande.ollama_relai.a_queue" with auto-delete. Default is anonymous exclusive queue.
-    * task.1.batchsize=20               # Number of documents to get when requesting jobs
+    * task.1.batchsize=5        # Number of documents to get when requesting jobs
 
 About the tls_method: 
     

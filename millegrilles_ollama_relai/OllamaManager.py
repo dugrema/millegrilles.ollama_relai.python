@@ -185,6 +185,13 @@ class OllamaManager:
                 self.__logger.warning(f"Task {task_name} does not have the active flag set, ignoring")
                 continue
 
+            instance_ids = get_property_text(params, 'instance_ids')
+            if instance_ids:
+                instances = instance_ids.split(',')
+                if self.__context.instance_id not in instances:
+                    self.__logger.warning(f"Task {task_name} is not assigned to this instance_id {self.__context.instance_id}, ignoring")
+                    continue
+
             await self.initialize_task(task_name, params)
 
     async def initialize_task(self, task_name: str, params: dict):

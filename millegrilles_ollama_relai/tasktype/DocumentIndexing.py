@@ -50,14 +50,15 @@ class Processor:
         self.__worker_channels: Optional[list[MilleGrillesPikaChannel]] = None
         self.__stop_event = asyncio.Event()
         self.__fetch_event = asyncio.Event()
-        self.__fetch_batch_size = 20
-        self.__api_url: Optional[str] = None
+        self.__fetch_batch_size = 5
+        self.__api_url: str = 'https://localhost:8000/v1'
+        self.__api_tls_method: str = 'mtls'
         self.__context_length = 16384
         self.__temperature = 1.0
         self.__supports_vision = False
         self.__model = 'NONAME'
-        self.__document_prompt = None
-        self.__image_prompt = None
+        self.__document_prompt = 'Describe this document.'
+        self.__image_prompt = "Describe this image."
         self.__connection_in_error = False  # Used to disable work and test the connection again
         self.__stop_thread_holder: Optional[asyncio.Task] = None
 
@@ -69,17 +70,28 @@ class Processor:
         self.__logger.info(f"Setting up DocumentIndexing task {self.__task_name} with params {self.__params}...")
         await self.__set_up_mq()
 
-        self.__fetch_batch_size = get_property_int(self.__params, 'batchsize') or 5
-        self.__api_url = get_property_text(self.__params, 'url')
-        if self.__api_url is None:
+        api_url = get_property_text(self.__params, 'url')
+        if api_url is None:
             raise Exception("API URL not configured")
+        self.__api_url = api_url
 
+        document_prompt = get_property_text(self.__params, 'prompt_documents')
+        if not document_prompt:
+            raise Exception("Document prompt is not configured")
+        self.__document_prompt = document_prompt
+
+        image_prompt = get_property_text(self.__params, 'prompt_images')
+        if not image_prompt:
+            raise Exception("Image prompt is not configured")
+        self.__image_prompt = image_prompt
+
+        # Optional properties with default
+        self.__fetch_batch_size = get_property_int(self.__params, 'batchsize') or 5
         self.__context_length = get_property_int(self.__params, 'context')
         self.__temperature = get_property_float(self.__params, 'temperature') or 1.0
         self.__supports_vision = get_property_int(self.__params, 'vision') == 1
         self.__model = get_property_text(self.__params, 'model')
-        self.__document_prompt = get_property_text(self.__params, 'prompt_documents')
-        self.__image_prompt = get_property_text(self.__params, 'prompt_images')
+        self.__api_tls_method = get_property_text(self.__params, 'tls_method') or 'mtls'
 
     async def __stop_thread(self):
         await self.__context.wait()
@@ -599,19 +611,25 @@ class Processor:
         configuration = self.__context.configuration
         connection_url = self.__api_url
         if connection_url.lower().startswith('https://'):
-            # Use a millegrille certificate authentication
-            cert = (configuration.private_cert_path, configuration.key_path)
-            params = {'verify': configuration.ca_path, 'cert': cert}
+            if self.__api_tls_method == 'mtls':
+                # Use a millegrille certificate authentication
+                cert = (configuration.private_cert_path, configuration.key_path)
+                # params = {'verify': configuration.ca_path, 'cert': cert}
+                ssl_context = self.__context.ssl_context
+            elif self.__api_tls_method == 'external':
+                ssl_context = True
+                cert = None
+            elif self.__api_tls_method == 'nocheck':
+                ssl_context = False
+                cert = None
+            else:
+                raise Exception(f'Unsupported TLS method: {self.__api_tls_method}')
         else:
-            params = {}
+            ssl_context = False
+            cert = None
 
-        if params.get('verify'):
-            ssl_context = self.__context.ssl_context
-        else:
-            ssl_context = None
-        httpx_client = httpx.AsyncClient(verify=ssl_context, cert=params.get('cert'))
+        httpx_client = httpx.AsyncClient(verify=ssl_context, cert=cert)
         return OpenaiAsyncClient(http_client=httpx_client, base_url=connection_url, api_key="DUMMY")
-
 
     async def summarize_file(self, job: FileInformation,
                              tmp_file: tempfile.NamedTemporaryFile,
