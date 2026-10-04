@@ -515,7 +515,7 @@ class Processor:
             await self.__disable_work()
 
         except:
-            self.__logger.exception("Error downloading files")
+            self.__logger.exception("Error processing files")
 
     async def __get_files_to_download(self, job: FileInformation) -> (Optional[dict], Optional[dict]):
         file_to_download = None
@@ -694,13 +694,16 @@ class Processor:
 
         elif job_type == CONST_JOB_SUMMARY_IMAGE:
             try:
-                mimetype = job['image_file']['mimetype']
-            except KeyError:
-                mimetype = 'image/png'
+                mimetype: str = job['image_file']['mimetype']
+            except (TypeError, KeyError):
+                mimetype = 'image/png'  # Image either supported or already png - see fn conditional_convert_to_png()
 
             if not image_tmp_file:
                 image_tmp_file = tmp_file
-                mimetype = job['mimetype']
+                try:
+                    mimetype: str = job['mimetype']
+                except (AttributeError, KeyError):
+                    mimetype = 'image/png'  # Image either supported or already png
             if not image_tmp_file:
                 ValueError('No image to review')
 
