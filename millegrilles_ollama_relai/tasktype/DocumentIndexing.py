@@ -43,13 +43,21 @@ class Processor:
         self.__logger = logging.getLogger(__name__ + '.' + self.__class__.__name__)
         self.__context: OllamaContext = context
         self.__attachment_handler: FilehostConnection = attachment_handler
+        self.__stop_event = asyncio.Event()
+        self.__stop_thread_holder: Optional[asyncio.Task] = None
+
+        # Channels and semaphores for job handling
+        self.__main_channel: Optional[MilleGrillesPikaChannel] = None
+        self.__worker_channels: Optional[list[MilleGrillesPikaChannel]] = None
+        self.__fetch_event = asyncio.Event()
+        self.__connection_in_error = False  # Used to disable work and test the connection again
+
+        # Configuration from CoreTopology
         self.__task_name: str = task_name
         self.__task_properties: dict = task_properties
         self.__params = task_properties['params']
-        self.__main_channel: Optional[MilleGrillesPikaChannel] = None
-        self.__worker_channels: Optional[list[MilleGrillesPikaChannel]] = None
-        self.__stop_event = asyncio.Event()
-        self.__fetch_event = asyncio.Event()
+
+        # Individual parameters
         self.__fetch_batch_size = 5
         self.__api_url: str = 'https://localhost:8000/v1'
         self.__api_tls_method: str = 'mtls'
@@ -59,8 +67,6 @@ class Processor:
         self.__model = 'NONAME'
         self.__document_prompt = 'Describe this document.'
         self.__image_prompt = "Describe this image."
-        self.__connection_in_error = False  # Used to disable work and test the connection again
-        self.__stop_thread_holder: Optional[asyncio.Task] = None
 
     @property
     def routing_action_work(self):
@@ -230,9 +236,14 @@ class Processor:
 
             q_channel = MilleGrillesPikaChannel(self.__context, prefetch_count=1)
             q_channel.add_queue(q_instance)
+
+            # Add to bus
             channels.append(q_channel)
             await self.__context.bus_connector.add_channel(q_channel)
+
+            # Ensure we start consuming (required when doing hot-refresh of configuration)
             await q_channel.start_consuming()
+
         self.__worker_channels = channels
 
     async def __on_newfuuid_event(self, message: MessageWrapper):
