@@ -354,7 +354,7 @@ class DocumentIndexHandler:
 
                         if image_file_to_download:
                             image_tmp_file = tempfile.NamedTemporaryFile(mode='wb+')
-                            await self.__download_file(filename, fuuid, secret_key_str, image_file_to_download, image_tmp_file)
+                            image_size = await self.__download_file(filename, fuuid, secret_key_str, image_file_to_download, image_tmp_file)
 
                             # Replaces the content of tmp_file with a PNG if the file is not either png or jpeg.
                             image_tmp_file.seek(0)
@@ -362,7 +362,7 @@ class DocumentIndexHandler:
                                 image_mimetype = job['image_file']['mimetype']
                             except (AttributeError, KeyError):
                                 image_mimetype = 'image/webp'
-                            await conditional_convert_to_png(image_mimetype, image_tmp_file)
+                            await conditional_convert_to_png(image_mimetype, image_tmp_file, image_size)
                             image_tmp_file.seek(0)
 
                             job['image_tmp_file'] = image_tmp_file

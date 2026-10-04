@@ -471,7 +471,7 @@ class Processor:
 
                 if image_file_to_download:
                     with tempfile.NamedTemporaryFile(mode='wb+') as tmp_img_file:
-                        await self.__download_file(fuuid, secret_key_str, image_file_to_download, tmp_img_file)
+                        file_size = await self.__download_file(fuuid, secret_key_str, image_file_to_download, tmp_img_file)
                         tmp_img_file.seek(0)    # Reposition for reading open handle
                         decrypted_job['image_tmp_file'] = tmp_img_file
 
@@ -480,7 +480,7 @@ class Processor:
                             image_mimetype = job['image_file']['mimetype']
                         except (AttributeError, KeyError):
                             image_mimetype = 'image/webp'
-                        await conditional_convert_to_png(image_mimetype, tmp_img_file)
+                        await conditional_convert_to_png(image_mimetype, tmp_img_file, file_size)
                         tmp_img_file.seek(0)
 
                         summary = await self.__run_summarize_file(decrypted_job, tmp_file, tmp_img_file)

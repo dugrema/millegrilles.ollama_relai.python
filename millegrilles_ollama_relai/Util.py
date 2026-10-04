@@ -2,6 +2,7 @@ import asyncio
 import binascii
 import tempfile
 import base64
+from typing import Optional
 
 import tiktoken
 
@@ -38,10 +39,37 @@ def cleanup_json_output(content: str):
     return content
 
 
-async def conditional_convert_to_png(mimetype: str, tmp_file: tempfile.TemporaryFile):
-    if mimetype not in ['image/png', 'image/jpg', 'image/jpeg']:
+IMG_SIDE_MAX = 800
+
+async def conditional_convert_to_png(mimetype: str, tmp_file: tempfile.TemporaryFile, file_len: Optional[int] = None):
+    # Check that the file is in a supported file format
+    must_convert = mimetype not in ['image/png', 'image/jpg', 'image/jpeg', 'image/webp']
+
+    if not must_convert:
+        # Check if file is large
+        must_convert = file_len is not None and file_len > 512 * 1024
+
+    if must_convert:
         # Convert to PNG, overwrite tmp file
         im = await asyncio.to_thread(Image.open, tmp_file)
+
+        # Check dimensions, the file will be reduced in size when larger than limit
+        width = im.width
+        height = im.height
+        resize = False
+
+        if width > height and width > IMG_SIDE_MAX:
+            width = IMG_SIDE_MAX
+            height = int(IMG_SIDE_MAX * height / width)
+            resize = True
+        elif height > width and height > IMG_SIDE_MAX:
+            height = IMG_SIDE_MAX
+            width = int(IMG_SIDE_MAX * width / height)
+            resize = True
+
+        if resize:
+            im.resize((width, height))
+
         tmp_file.seek(0)  # Will overwrite with PNG
         await asyncio.to_thread(im.save, tmp_file, "png")
         tmp_file.truncate()
