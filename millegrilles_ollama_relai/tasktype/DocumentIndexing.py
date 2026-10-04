@@ -509,7 +509,7 @@ class Processor:
             else:
                 self.__logger.exception(
                     f"Error during decryption of files for fuuid {fuuid}, also missing tuuid, unable to cancel")
-        except openai.APIConnectionError as e:
+        except (openai.APIConnectionError, openai.InternalServerError) as e:
             self.__logger.warning("API error: %s", e)
             # This is a connection error, link is down
             await self.__disable_work()
