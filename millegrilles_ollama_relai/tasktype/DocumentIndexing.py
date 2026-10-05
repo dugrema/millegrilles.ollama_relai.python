@@ -168,8 +168,11 @@ class Processor:
                 temperature=self.__temperature,
                 input='This is a connection test. Just reply with OK.',
             )
-        except openai.APIConnectionError as e:
+        except (openai.APIConnectionError, openai.InternalServerError) as e:
             self.__logger.warning("API connection still in error: %s" % e)
+            return
+        except:
+            self.__logger.warning("API connection still in error, unhandled exception during test")
             return
 
         # Connection fixed
