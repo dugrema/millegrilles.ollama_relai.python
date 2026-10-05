@@ -10,17 +10,14 @@ from millegrilles_messages.messages import Constantes
 from millegrilles_messages.structs.Filehost import Filehost
 from millegrilles_messages.Filehost import FilehostConnection
 from millegrilles_ollama_relai.OllamaContext import OllamaContext
-from millegrilles_ollama_relai.OllamaInstanceManager import OllamaInstanceManager
-from millegrilles_ollama_relai.Structs import OllamaRelaiConfigurationFile, OllamaRelaiConfigurationProperties, \
-    OllamaRelaiConfigurationPropertiesValue, get_property_text, get_property_int
+from millegrilles_ollama_relai.Structs import OllamaRelaiConfigurationFile, get_property_text, get_property_int
 
 
 class OllamaManager:
 
-    def __init__(self, context: OllamaContext, ollama_instances: OllamaInstanceManager, attachment_handler: FilehostConnection):
+    def __init__(self, context: OllamaContext, attachment_handler: FilehostConnection):
         self.__logger = logging.getLogger(__name__+'.'+self.__class__.__name__)
         self.__context = context
-        self.__ollama_instances = ollama_instances
         self.__attachment_handler = attachment_handler
 
         self.__filehost_listeners: list[Callable[[Optional[Filehost]], Awaitable[None]]] = list()

@@ -9,7 +9,7 @@ import tempfile
 import httpx
 import openai
 import pydantic
-from typing import Optional
+from typing import Optional, TypedDict
 
 import tiktoken
 from cryptography.x509 import ExtensionNotFound
@@ -25,17 +25,37 @@ from millegrilles_messages.chiffrage.DechiffrageUtils import dechiffrer_document
 from millegrilles_messages.chiffrage.Mgs4 import chiffrer_document_cles, chiffrer_mgs4_bytes_secrete
 from millegrilles_messages.messages import Constantes
 from millegrilles_messages.messages.MessagesModule import MessageWrapper
-from millegrilles_ollama_relai.DocumentIndexHandler import FileInformation
 from millegrilles_ollama_relai.OllamaContext import OllamaContext
 from millegrilles_ollama_relai.Structs import get_property_int, get_property_text, get_property_float, SummaryText
 from millegrilles_ollama_relai.Util import conditional_convert_to_png, decode_base64_nopad, cleanup_json_output, \
     encode_image_to_data_uri
+
 
 CONST_ACTION_SUMMARY = 'leaseForSummary'
 CONST_JOB_SUMMARY_TEXT = 'summaryText'
 CONST_JOB_SUMMARY_IMAGE = 'summaryImage'
 CONST_CHAR_MULTIPLIER = 4.0
 CONST_SUMMARY_NUM_PREDICT = 6144
+
+
+class FileInformation(TypedDict):
+    job_type: Optional[str]
+    lease_action: str
+    tuuid: Optional[str]
+    fuuid: str
+    user_id: Optional[str]
+    language: str
+    domain: str
+    cuuids: Optional[list[str]]
+    metadata: Optional[dict]
+    mimetype: Optional[str]
+    version: Optional[dict]
+    key: Optional[dict]
+    tmp_file: Optional[tempfile.NamedTemporaryFile]
+    image_tmp_file: Optional[tempfile.NamedTemporaryFile]
+    media: Optional[dict]
+    image_file: Optional[dict]
+
 
 class Processor:
 

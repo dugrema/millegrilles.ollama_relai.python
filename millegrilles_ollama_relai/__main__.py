@@ -11,7 +11,6 @@ from millegrilles_messages.Filehost import FilehostConnection
 from millegrilles_ollama_relai.MgbusHandler import MgbusHandler
 from millegrilles_ollama_relai.OllamaConfiguration import OllamaConfiguration
 from millegrilles_ollama_relai.OllamaContext import OllamaContext
-from millegrilles_ollama_relai.OllamaInstanceManager import OllamaInstanceManager
 from millegrilles_ollama_relai.OllamaManager import OllamaManager
 
 LOGGER = logging.getLogger(__name__)
@@ -56,14 +55,13 @@ async def wiring(context: OllamaContext) -> list[Awaitable]:
     # Service instances
     bus_connector = MilleGrillesPikaConnector(context)
     context.bus_connector = bus_connector
-    ollama_instances = OllamaInstanceManager(context)
     attachment_handler = FilehostConnection(context)
 
     # Facade
-    manager = OllamaManager(context, ollama_instances, attachment_handler)
+    manager = OllamaManager(context, attachment_handler)
 
     # Access modules
-    bus_handler = MgbusHandler(manager, ollama_instances)
+    bus_handler = MgbusHandler(manager)
 
     # Setup, injecting additional dependencies
     await manager.setup()  # Create folders for other modules
@@ -71,7 +69,6 @@ async def wiring(context: OllamaContext) -> list[Awaitable]:
     # Create tasks
     coros = [
         context.run(),
-        ollama_instances.run(),
         manager.run(),
         bus_handler.run(),
     ]
