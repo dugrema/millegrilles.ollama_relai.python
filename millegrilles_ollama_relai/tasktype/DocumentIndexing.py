@@ -324,6 +324,12 @@ class Processor:
                 try:
                     async with self.__workers_busy:  # Used to keep track on number of busy workers, not block
                         await self.__process_work_item(message.parsed)
+                except FatalRunSummaryException as e:
+                    if e.tuuid and e.fuuid:
+                        self.__logger.exception(f"Fatal error processing work item, cancelling tuuid:{e.tuuid} fuuid:{e.fuuid}")
+                        await self.__cancel_job(e.tuuid, e.fuuid)
+                    else:
+                        self.__logger.exception(f"Fatal error processing work item, no information to cancel: {e}")
                 except:
                     self.__logger.exception("Error processing work item")
 
@@ -482,19 +488,24 @@ class Processor:
 
         try:
             # Decrypt key
-            decrypted_job: FileInformation = dechiffrer_document(signing_key, encrypted_key, job)
+            decrypted_job: FileInformation = await asyncio.to_thread(dechiffrer_document, signing_key, encrypted_key, job)
             self.__logger.debug("Decrypted job\n%s" % decrypted_job)
         except nacl.exceptions.RuntimeError:
+            # Decryption didn't work, likely the job was encrypted for a different process (different key).
+            # This error has nothing to do with the file encryption. The job should be retried when the file lease expires.
             self.__logger.exception(
-                f"Error decrypting job info (wrong key?) - will retry")
+                f"Error decrypting job info for fuuid:{job.get('fuuid')} (wrong key?) - will retry")
             return
 
+        has_media = False
+
+        fuuid = decrypted_job['fuuid']
         try:
-            fuuid = decrypted_job['fuuid']
             secret_key_str = decrypted_job['key']['cle_secrete_base64']
             # filename = decrypted_job['metadata']['nom']
 
             file_to_download, image_file_to_download = await self.__get_files_to_download(decrypted_job)
+            has_media = file_to_download or image_file_to_download
 
             with tempfile.NamedTemporaryFile(mode='wb+') as tmp_file:
                 if file_to_download:
@@ -524,11 +535,12 @@ class Processor:
                 self.__logger.debug("Summary:\n%s", summary)
 
         except nacl.exceptions.RuntimeError:
-            tuuid = job.get('tuuid')
+            tuuid = decrypted_job.get('tuuid')
             if tuuid:
                 self.__logger.exception(
                     f"Error during decryption of files for fuuid {fuuid} CANCELLING")
-                await self.__cancel_job('tuuid', job['fuuid'])
+                # await self.__cancel_job('tuuid', job['fuuid'])
+                raise FatalRunSummaryException(tuuid, fuuid)
             else:
                 self.__logger.exception(
                     f"Error during decryption of files for fuuid {fuuid}, also missing tuuid, unable to cancel")
@@ -536,7 +548,16 @@ class Processor:
             self.__logger.warning("API error: %s", e)
             # This is a connection error, link is down
             await self.__disable_work()
-
+        except openai.BadRequestError as e:
+            if e.status_code == 400:
+                if has_media:
+                    # This error may be because the media cannot be processed
+                    # Check if audio/image are in the body of the error - if yes, this cannot be retried
+                    content: str = e.message
+                    if 'audio' in content and 'image' in content:
+                        tuuid = decrypted_job.get('tuuid')
+                        raise FatalRunSummaryException(tuuid, fuuid)
+            raise e
         except:
             self.__logger.exception("Error processing files")
 
@@ -898,3 +919,10 @@ class JobPreparationException(Exception):
 
 class FatalSummaryException(Exception):
     pass
+
+class FatalRunSummaryException(Exception):
+
+    def __init__(self, tuuid: Optional[str], fuuid: Optional[str], *args, **kwargs):
+        super().__init__(args, kwargs)
+        self.tuuid = tuuid
+        self.fuuid = fuuid
