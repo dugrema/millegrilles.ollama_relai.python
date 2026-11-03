@@ -1,12 +1,25 @@
-FROM registry.millegrilles.com/millegrilles/messages_python:2026.6.15 AS stage1
+FROM registry.millegrilles.com/millegrilles/messages_python:2026.7.23 AS stage1
+
+ARG APT_PROXY
+ARG PIP_INDEX_URL=https://pypi.org/simple/
+ARG PIP_TRUSTED_HOST=pypi.org
+
+ENV PIP_INDEX_URL="$PIP_INDEX_URL" \
+    PIP_TRUSTED_HOST="$PIP_TRUSTED_HOST"
 
 # Install dependencies
-RUN apt-get update && \
+RUN if [ -n "$APT_PROXY" ]; then \
+         echo "Acquire::http::Proxy \"$APT_PROXY\";" > /etc/apt/apt.conf.d/01proxy; \
+    fi && \
+    apt-get update && \
     apt-get install -y --no-install-recommends poppler-utils && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Stage 2
 FROM stage1 AS stage2
+
+ARG PIP_INDEX_URL=https://pypi.org/simple/
+ARG PIP_TRUSTED_HOST=pypi.org
 
 # Creer repertoire app, copier fichiers
 COPY ./requirements.txt $BUILD_FOLDER/requirements.txt
@@ -21,7 +34,9 @@ RUN pip3 install --no-cache-dir -r $BUILD_FOLDER/requirements.txt
 # Final stage
 FROM stage2
 
-ARG VBUILD=2025.3.0
+ARG VBUILD=2026.7.0
+ARG PIP_INDEX_URL=https://pypi.org/simple/
+ARG PIP_TRUSTED_HOST=pypi.org
 
 ENV KEY_PATH=/run/secrets/key_cert.pem \
     CA_PATH=/run/secrets/pki.millegrille.cert \

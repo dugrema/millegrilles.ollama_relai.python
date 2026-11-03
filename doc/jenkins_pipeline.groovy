@@ -3,10 +3,10 @@ pipeline {
 
     parameters {
         string(defaultValue: 'master', name: 'BRANCH')
-        string(defaultValue: '2026.3', name: 'VERSION')
+        string(defaultValue: '2026.7', name: 'VERSION')
         string(defaultValue: 'jenkins-maple', name: 'CREDENTIALS_ID')
         string(defaultValue: 'ssh://git.maple.maceroc.com/git/millegrilles.ollama_relai.python.git', name: 'GIT_URL')
-        string(defaultValue: 'registry.millegrilles.com:5000/millegrilles/ollama_relai_python', name: 'DOCKER_IMAGE')
+        string(defaultValue: 'vmhost2.maple.maceroc.com/millegrilles/ollama_relai_python', name: 'DOCKER_IMAGE')
     }
 
     environment {
@@ -15,6 +15,7 @@ pipeline {
     }
 
     stages {
+
         stage('Checkout') {
             steps {
                 checkout scmGit(branches: [[name: params.BRANCH]], extensions: [], userRemoteConfigs: [[credentialsId: params.CREDENTIALS_ID, url: params.GIT_URL]])
@@ -23,8 +24,15 @@ pipeline {
 
         stage('Build & Package & Deploy') {
             steps {
-                sh "make deploy VERSION_FULL=${VBUILD}"
+                withCredentials([usernamePassword(
+                    credentialsId: 'nexus-jenkins',
+                    usernameVariable: 'NEXUS_USER',
+                    passwordVariable: 'NEXUS_PASS'
+                )]) {
+                    sh "make deploy VERSION_FULL=${VBUILD}"
+                }
             }
         }
+
     }
 }
