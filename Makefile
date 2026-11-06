@@ -2,7 +2,7 @@
 
 # --- Configuration ---
 # Defaults that can be overridden via command line (e.g., make build VERSION=2027.0)
-VERSION ?= 2026.3
+VERSION ?= 2026.7
 BUILD_NUMBER ?= 1
 VERSION_FULL ?= $(VERSION).$(BUILD_NUMBER)
 ARCHIVE_NAME ?= ollama_relai_python
@@ -20,7 +20,7 @@ DIST_DIR = dist
 BUILD_ASSETS_DIR = build_assets
 MANIFEST_FILE = $(BUILD_ASSETS_DIR)/manifest.build.json
 STAGING_DIR = staging
-DOCKER_IMAGE?=registry.millegrilles.com:5000/millegrilles/ollama_relai_python
+DOCKER_IMAGE?=nexus.maple.maceroc.com/millegrilles/ollama_relai_python
 DOCKER_IMAGE_NO_PORT=$(shell echo $(DOCKER_IMAGE) | sed 's/:[0-9]*//')
 
 # --- Environment ---
@@ -94,7 +94,7 @@ deploy: package
 			fi; \
 			echo "==> Deploying $$NAME"; \
 			rsync "$(ARTIFACTS_DIR)/$$NAME.$(VERSION_FULL).tar.gz" ${DEPLOY_RSYNC_WEBAPP_DEST}/ollama_relai/${NAME}/; \
-			${DEPLOY_CATALOGUE_UPDATE_COMMAND} --baseurl https://libs.millegrilles.com/archives/ollama_relai --archive archives/ollama_relai/"$$NAME.$(VERSION_FULL).tar.gz"; \
+			${DEPLOY_CATALOGUE_UPDATE_COMMAND} --baseurl ${DEPLOY_ARCHIVE_URL}/ollama_relai --archive archives/ollama_relai/"$$NAME.$(VERSION_FULL).tar.gz"; \
 		fi; \
 	done
 
